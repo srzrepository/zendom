@@ -219,6 +219,32 @@ button{cursor:pointer}
 .field.bad input,.field.bad select,.field.bad textarea{border-color:var(--late)}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .two > *{min-width:0}
+/* radio + checkbox chips: the .field input rule must not turn the little circle into a full-size box */
+.chip > input:is([type=radio],[type=checkbox]){width:20px;height:20px;min-height:0;padding:0;margin:0;border:0;flex:none;background:none;box-shadow:none}
+.chip:has(> input:checked){color:var(--ink);background:var(--surface);box-shadow:inset 0 0 0 2px var(--accent)}
+/* iPhone: date and time boxes have a wide built-in minimum; let them shrink to their column */
+@supports (-webkit-touch-callout:none){
+  input[type=date],input[type=time]{-webkit-appearance:none;appearance:none;min-width:0;max-width:100%;display:block}
+  input::-webkit-date-and-time-value{text-align:left}
+}
+/* home-screen app: no whole-page bounce (it dragged the bottom bar along) */
+html,body{overscroll-behavior-y:none}
+body.typing .nav,body.typing .fab{display:none}
+/* status */
+.who button{position:relative}
+.who .st{position:absolute;left:16px;top:-3px;font-size:.78rem;line-height:1;filter:drop-shadow(0 1px 0 var(--bg))}
+.status-card{display:flex;flex-direction:column;gap:8px}
+.strow{display:flex;align-items:center;gap:10px;width:100%;text-align:left;border:0;background:transparent;padding:2px 0;color:inherit}
+.strow .av{width:34px;height:34px;border-radius:10px;overflow:hidden;flex:none;background:var(--surface-2)}
+.strow .tx{flex:1;min-width:0}
+.strow .tx b{display:block}
+.strow .tx span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.emopick{display:flex;flex-wrap:wrap;gap:6px}
+.emopick label{width:42px;height:42px;display:grid;place-items:center;font-size:1.3rem;border-radius:4px;box-shadow:inset 0 0 0 2px var(--line);background:var(--surface);cursor:pointer;position:relative}
+.emopick input{position:absolute;opacity:0;inset:0;margin:0;width:100%;height:100%;min-height:0;padding:0}
+.emopick label:has(input:checked){box-shadow:inset 0 0 0 3px var(--accent);background:var(--bg)}
+.emopick label:has(input:focus-visible){outline:3px solid var(--accent);outline-offset:2px}
+.profstatus{margin:4px 0 0;font-size:.95rem}
 details.cpe{background:var(--surface-2);border-radius:16px;padding:10px 12px}
 details.cpe summary{font-weight:700;cursor:pointer}
 details.cpe .field{margin-top:10px}
@@ -615,7 +641,7 @@ h2{font-size:1.7rem}
 <div class="wrap">
   <header class="top">
     <div class="brand" aria-label="zen dom">zen<span class="dot">·</span>dom</div>
-    <div class="who" role="group" aria-label="Who is using the app" id="who"></div>
+    <div class="who" role="group" aria-label="Profiles" id="who"></div>
   </header>
   <div id="banners"></div>
   <main id="view" class="view" aria-live="polite"></main>
@@ -1091,6 +1117,8 @@ function normalize(raw){
     p.checkups = objs(p.checkups).map(c => Object.assign(c, {name:str(c.name,80), months: clampInt(c.months,1,120,12), last: isDate(c.last)?c.last:"", provider:str(c.provider,80),
       next: c.next && typeof c.next === "object" && isDate(c.next.date) ? {date:c.next.date, time: /^([01]\d|2[0-3]):[0-5]\d$/.test(String(c.next.time || "")) ? c.next.time : "", where: str(c.next.where, 120)} : null})).filter(c => c.name.trim());
     p.vaccines = objs(p.vaccines).map(v => Object.assign(v, {name:str(v.name,80), date: isDate(v.date)?v.date:"", nextDue: isDate(v.nextDue)?v.nextDue:""})).filter(v => v.name.trim());
+    if(p.kind !== "cat"){ const st = (p.status && typeof p.status === "object") ? p.status : {};
+      p.status = {emoji: str(st.emoji, 16).trim(), text: str(st.text, 80).trim(), at: Math.max(0, Number(st.at) || 0)}; }
     out.people[k] = p;
   });
   out.chores = (Array.isArray(d.chores) ? d.chores : []).filter(c => c && typeof c === "object" && str(c.title).trim()).map(c => {
@@ -1334,7 +1362,8 @@ const other = k => k === "sam" ? "charlie" : "sam";
 function render(){
   if(!TABS.some(t => t[0] === prefs.tab)) prefs.tab = "today";
   applyLook();
-  $("#who").innerHTML = HUMANS.map(k => `<button type="button" data-act="setUser" data-id="${k}" aria-pressed="${prefs.user===k}"><span class="av">${sprite(k)}</span><span class="nm">${esc(nameOf(k))}</span></button>`).join("");
+  $("#who").innerHTML = HUMANS.map(k => { const st = state.people[k].status;
+    return `<button type="button" data-act="goFam" data-id="${k}" aria-label="${esc(nameOf(k))}'s profile${st.text || st.emoji ? ": " + esc((st.emoji + " " + st.text).trim()) : ""}"><span class="av">${sprite(k)}</span>${st.emoji ? `<span class="st" aria-hidden="true">${esc(st.emoji)}</span>` : ""}<span class="nm">${esc(nameOf(k))}</span></button>`; }).join("");
   $("#nav").innerHTML = TABS.map(([k,l]) => `<button type="button" data-act="tab" data-id="${k}" ${prefs.tab===k?'aria-current="page"':""}>${IC[k]}<span>${l}</span></button>`).join("");
   const v = $("#view");
   v.innerHTML = ({today:viewToday, chores:viewChores, kitchen:viewKitchen, budget:viewBudgetArea, more:viewMore})[prefs.tab]();
@@ -1410,6 +1439,8 @@ function viewTodayMain(){
     <div class="hero-text">${seasonLine ? `<p class="season">${seasonLine}</p>` : ""}<h1>${look.bdays.includes(me) ? "Happy birthday" : greet}, ${esc(nameOf(me))}</h1><p>${esc(dateLine)}${doneCount ? ` · ${doneCount} done today` : ""}</p><p class="mood" role="status">${esc(paprikaMood().line)}</p></div>
     ${roomHTML()}
   </section>
+
+  ${statusCardHTML(me)}
 
   <section class="sec">
     <div class="sec-head"><span class="label">Up next for you</span><button class="link" type="button" data-act="tab" data-id="chores">All chores</button></div>
@@ -1489,7 +1520,8 @@ function viewFamily(){
   <section class="card">
     <div class="prof ${k}"><div class="big">${sprite(k)}</div>
       <div style="min-width:0;flex:1"><h2>${esc(p.name)}</h2><div class="muted small">${cat ? "Our cat" : (k==="sam" ? "Samantha Zenteno" : "Charlie Purdom")}</div>
-      <button class="link" type="button" data-act="editBasics" style="padding-left:0">Edit details</button></div></div>
+      ${cat ? "" : `<p class="profstatus">${p.status.text || p.status.emoji ? `${esc(p.status.emoji)} ${esc(p.status.text)} <span class="muted small">· ${esc(sinceText(p.status.at))}</span>` : `<span class="muted small">No status set</span>`}</p>`}
+      <button class="link" type="button" data-act="editBasics" style="padding-left:0">Edit details</button>${!cat && k === prefs.user ? ` <button class="link" type="button" data-act="setStatus">Change status</button>` : ""}</div></div>
     <div class="facts">${facts.map(([a,b]) => `<div class="fact"><span class="label">${esc(a)}</span><b>${esc(b)}</b></div>`).join("")}</div>
   </section>
   <p class="private">${IC.lock} ${sync.status === "on" ? "Shared only between your two Google accounts, in your private zen·dom database." : "Stored only on this device. Nothing is uploaded unless you sign in to share between phones."}</p>
@@ -1573,8 +1605,11 @@ function lookSection(){
   const sw = (id, title, sub, dots) => `<button type="button" class="swatch" data-act="setTheme" data-id="${id}" aria-pressed="${st.theme===id}"><span class="dots">${dots.map(c => `<i style="background:${c}"></i>`).join("")}</span><span>${esc(title)}<small>${esc(sub)}</small></span></button>`;
   const favSel = k => `<label class="chip" for="fav-${k}" style="gap:8px"><span class="av">${sprite(k, "", true)}</span>${esc(nameOf(k))}'s color
       <select id="fav-${k}" data-change="setFav" data-id="${k}" style="border:0;background:transparent;font-weight:700">${Object.entries(PALETTES).map(([p,v]) => `<option value="${p}" ${st.favorites[k]===p?"selected":""}>${v.name}</option>`).join("")}</select></label>`;
+  const signedWho = sync.user ? Object.keys(ACCOUNTS).find(k => ACCOUNTS[k].includes(sync.user.email)) : null;
   return `<section class="sec"><span class="label">Look &amp; feel</span>
     <div class="card" style="display:flex;flex-direction:column;gap:14px">
+      <div class="setrow"><div><b>Whose phone is this?</b><div class="small muted">${signedWho ? `Signed in as ${esc(nameOf(signedWho))}, so Today shows ${esc(nameOf(signedWho))}'s day.` : "Today shows this person's chores and greeting. Signing in sets it for you."}</div></div>
+        ${signedWho ? "" : `<div class="seg" role="group" aria-label="Whose phone">${HUMANS.map(k => `<button type="button" class="chip" data-act="setUser" data-id="${k}" aria-pressed="${prefs.user===k}">${esc(nameOf(k))}</button>`).join("")}</div>`}</div>
       <div class="swatches">
         ${sw("follow","Follow who's using", "Each of you gets your own colors", [PALETTES[st.favorites.sam].dots[0], PALETTES[st.favorites.charlie].dots[0]])}
         ${Object.entries(PALETTES).map(([k,v]) => sw(k, v.name, k==="sage" ? "Calm green" : k==="blue" ? "Cool denim" : "Warm autumn", v.dots)).join("")}
@@ -4010,6 +4045,9 @@ function roomMount(){
     roomFrame(performance.now() - R.start);
   }, 100);
 }
+const TYPING_SEL = "input:not([type=radio]):not([type=checkbox]):not([type=range]):not([type=file]),textarea,select";
+document.addEventListener("focusin", e => { if(e.target.matches && e.target.matches(TYPING_SEL)) document.body.classList.add("typing"); });
+document.addEventListener("focusout", () => setTimeout(() => { const a = document.activeElement; if(!(a && a.matches && a.matches(TYPING_SEL))) document.body.classList.remove("typing"); }, 60));
 document.addEventListener("click", e => {             // tap Paprika for a heart
   const cv = e.target.closest && e.target.closest("#roomCv"); if(!cv || !RM_RT.papBox) return;
   const r = cv.getBoundingClientRect(), x = (e.clientX - r.left) * RM.W / r.width, y = (e.clientY - r.top) * RM.H / r.height, b = RM_RT.papBox;
@@ -4218,6 +4256,39 @@ function basicsForm(){
   });
 }
 
+const STATUS_EMOJI = ["🙂","😴","🎧","💼","🛒","🍳","🏃","🎮","📚","🤒","🔋","🫠","🎉","❤️","🐱",""];
+const STATUS_PRESETS = [["💼","At work"],["🎧","Heads down, focusing"],["😴","Napping"],["🔋","Low battery, need quiet"],["🛒","Out running errands"],["🙂","Free, come say hi"]];
+function sinceText(ts){
+  if(!ts) return "";
+  const m = Math.round((Date.now() - ts) / 60000);
+  if(m < 1) return "just now"; if(m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60); if(h < 24) return `${h} hr ago`;
+  const d = Math.round(h / 24); return d === 1 ? "yesterday" : `${d} days ago`;
+}
+function statusCardHTML(me){
+  const row = (k, mine) => { const st = state.people[k].status, has = st.text || st.emoji;
+    return `<button type="button" class="strow" data-act="${mine ? "setStatus" : "goFam"}" data-id="${k}"><span class="av">${sprite(k)}</span>
+      <span class="tx"><b>${mine ? "You" : esc(nameOf(k))}</b><span class="${has ? "" : "muted"}">${has ? `${esc(st.emoji)} ${esc(st.text)}` : (mine ? "Tap to set a status" : "No status")}</span></span>
+      <span class="muted small">${has ? esc(sinceText(st.at)) : ""}</span></button>`; };
+  return `<section class="card status-card" aria-label="Statuses">${row(me, true)}${row(other(me), false)}</section>`;
+}
+function statusForm(){
+  const k = prefs.user, st = state.people[k].status;
+  openSheet("Your status", `
+    <div class="field"><span class="lab">Pick an emoji</span><div class="emopick" role="radiogroup" aria-label="Emoji">${STATUS_EMOJI.map(e => `<label title="${e || "No emoji"}"><input type="radio" name="semoji" value="${e}" ${st.emoji === e ? "checked" : ""} aria-label="${e || "No emoji"}">${e || "–"}</label>`).join("")}</div></div>
+    ${field("stext", "What's up?", `<input id="stext" name="stext" maxlength="80" value="${esc(st.text)}" placeholder="e.g. Heads down until 3" autocomplete="off">`, "Just for fun. It doesn't send a notification.")}
+    <div class="seg">${STATUS_PRESETS.map(([e, t]) => `<button type="button" class="chip" data-act="statusPreset" data-emoji="${e}" data-text="${esc(t)}">${e} ${esc(t)}</button>`).join("")}</div>
+    <div class="actions">${st.text || st.emoji ? `<button type="button" class="btn ghost small" data-act="clearStatus">Clear status</button>` : "<span></span>"}
+      <div class="r"><button type="button" class="btn ghost" data-act="closeSheet">Cancel</button><button type="submit" class="btn">Save</button></div></div>`,
+  form => {
+    const text = val(form, "stext").slice(0, 80), r = form.querySelector("input[name=semoji]:checked");
+    const emoji = r && STATUS_EMOJI.includes(r.value) ? r.value : "";
+    if(!text && !emoji) return fail("stext", "Pick an emoji or type a few words, or tap Clear status.");
+    state.people[k].status = {emoji, text, at: Date.now()};
+    save(); closeSheet(); render(); toast("Status updated");
+  }, false);
+}
+
 function allergyForm(){
   const p = state.people[prefs.fam];
   openSheet(`Add an allergy for ${p.name}`, `${field("allergy","Allergy", `<input id="allergy" name="allergy" maxlength="60" placeholder="e.g. Penicillin, peanuts, chicken" autocomplete="off">`)}${footer("")}`,
@@ -4350,7 +4421,14 @@ function toast(msg, undo){
 /* ---------- actions (event delegation) ---------- */
 const ACTIONS = {
   tab: id => { prefs.tab = id; savePrefs(); render(); window.scrollTo(0,0); },
-  setUser: id => { prefs.user = id; savePrefs(); render(); },
+  setUser: id => { if(!HUMANS.includes(id)) return;
+    const signed = sync.user && Object.keys(ACCOUNTS).find(k => ACCOUNTS[k].includes(sync.user.email));
+    if(signed && signed !== id){ toast(`This phone is signed in as ${nameOf(signed)}`); return; }
+    prefs.user = id; savePrefs(); render(); },
+  setStatus: () => statusForm(),
+  statusPreset: (id, el) => { const f = el.closest("form"); if(!f) return; const t = f.elements.stext; t.value = el.dataset.text || "";
+    const r = f.querySelector(`input[name=semoji][value="${CSS.escape(el.dataset.emoji || "")}"]`); if(r) r.checked = true; t.focus(); },
+  clearStatus: () => { const p = state.people[prefs.user]; p.status = {emoji:"", text:"", at:Date.now()}; save(); closeSheet(); render(); toast("Status cleared"); },
   filter: id => { prefs.choreFilter = id; savePrefs(); render(); },
   fam: id => { prefs.fam = id; savePrefs(); render(); },
   goFam: id => { if(PEOPLE.includes(id)) prefs.fam = id; prefs.tab = "more"; prefs.moreTab = "family"; savePrefs(); render(); window.scrollTo(0,0); },
@@ -4644,7 +4722,7 @@ function describeChange(key, o, n){
   if(kind === "bill"){ if(!n) return null; if(!o) return `added a bill: ${clip(n.name, 30)}`; if(n.nextDue > o.nextDue) return `paid ${clip(n.name, 30)}`; return null; }
   if(kind === "fentry"){ if(!n || o) return null; return n.kind === "in" ? "added money to the Fun Fund" : n.kind === "out" ? "took money out of the Fun Fund" : null; }
   if(kind === "fgoal"){ if(!n || o) return null; return `started a Fun Fund goal: ${clip(n.name, 30)}`; }
-  if(kind === "person"){ if(!n || !o || JSON.stringify(n) === JSON.stringify(o)) return null; return `updated ${n.name}'s profile`; }
+  if(kind === "person"){ const core = x => Object.assign({}, x, {status:null, outfit:null}); if(!n || !o || JSON.stringify(core(n)) === JSON.stringify(core(o))) return null; return `updated ${n.name}'s profile`; }
   return null;
 }
 const notifyQ = {items:[], timer:0};

@@ -111,6 +111,9 @@ async def main():
         nid = await ev(A, "state.notes[0].id")
         await ev(A, f"removeBy(state.notes, '{nid}'); save()"); await settle(A, B)
         check("a deleted note disappears on the other phone", not await ev(B, f"state.notes.some(n => n.id === '{nid}')"))
+        await ev(A, "ACTIONS.tab('today'); ACTIONS.setStatus(); document.querySelector('#stext').value = 'Heads down'; document.querySelector('#sheetForm input[name=semoji][value=\"🎧\"]').checked = true; document.querySelector('#sheetForm').requestSubmit()"); await settle(A, B)
+        check("a status set on Sam's phone shows on Charlie's Today", "🎧 Heads down" in await ev(B, "ACTIONS.tab('today'); document.querySelector('.status-card').innerText"))
+        check("Charlie's Today is Charlie's, Sam's status is under Sam", await ev(B, "document.querySelector('.status-card .strow:last-child b').textContent") == "Sam")
 
         # different items edited at the same moment: both kept
         c1, c2 = (await ev(A, "state.chores.map(c => c.id)"))[:2]

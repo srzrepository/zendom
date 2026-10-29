@@ -739,6 +739,77 @@ async def test_appointments(browser):
     await pg3.context.close()
 
 
+async def test_status(browser):
+    pg = await new_page(browser, clock="2026-11-12T10:00:00-08:00")
+    view = lambda: ev(pg, "document.querySelector('#view').innerText")
+    check("status: Today invites you to set one", "Tap to set a status" in await view())
+    # top-right buttons are now Family shortcuts, not a user switch
+    await pg.locator('#who [data-id="charlie"]').click(); await pg.wait_for_timeout(80)
+    check("top-right Charlie opens Charlie's profile", await ev(pg, "prefs.tab + '/' + prefs.moreTab + '/' + prefs.fam") == "more/family/charlie")
+    check("…without changing whose Today it is", await ev(pg, "prefs.user") == "sam")
+    await pg.locator('#who [data-id="sam"]').click(); await pg.wait_for_timeout(80)
+    check("top-right Sam opens Sam's profile", await ev(pg, "prefs.fam") == "sam" and "Change status" in await view())
+    # signed out: choose whose phone in Settings
+    await ev(pg, "ACTIONS.tab('more'); ACTIONS.mtab('settings')")
+    check("settings: whose-phone choice shown when signed out", "Whose phone is this?" in await view())
+    await act(pg, "setUser", "charlie"); await ev(pg, "ACTIONS.tab('today')")
+    check("settings: picking Charlie makes Today Charlie's", "Charlie" in await ev(pg, "document.querySelector('.hero h1').innerText"))
+    await ev(pg, "ACTIONS.setUser('sam'); ACTIONS.tab('today')")
+    # set a status: empty is refused
+    await act(pg, "setStatus")
+    check("status: sheet opens", await sheet_open(pg))
+    await submit(pg)
+    check("status: empty is refused with a message", await sheet_open(pg) and "Pick an emoji or type" in await ev(pg, "document.querySelector('#sheetForm').innerText"))
+    await pg.locator('#sheetForm [data-act="statusPreset"]', has_text="Napping").click()
+    await submit(pg)
+    st = (await stored(pg))["people"]["sam"]["status"]
+    check("status: preset saves emoji and words", st["emoji"] == "😴" and st["text"] == "Napping" and st["at"] > 0, json.dumps(st))
+    check("status: shows on Today", "😴 Napping" in await view() and "just now" in await view())
+    check("status: emoji badge on the top-right avatar", await ev(pg, "document.querySelector('#who [data-id=sam] .st').textContent") == "😴")
+    await ev(pg, "ACTIONS.goFam('sam')")
+    check("status: shows on the Family profile", "😴 Napping" in await view())
+    await ev(pg, "ACTIONS.goFam('charlie')")
+    check("status: can't change someone else's", "Change status" not in await view() and "No status set" in await view())
+    # edit with typed text, over-long
+    await ev(pg, "ACTIONS.tab('today')"); await act(pg, "setStatus")
+    await fill(pg, {"stext": "x" * 120}); await submit(pg)
+    check("status: long text kept to 80 characters", len((await stored(pg))["people"]["sam"]["status"]["text"]) <= 80)
+    await act(pg, "setStatus"); await act(pg, "clearStatus")
+    st = (await stored(pg))["people"]["sam"]["status"]
+    check("status: Clear status empties it", st["emoji"] == "" and st["text"] == "")
+    # a status change never becomes a notification; a real profile edit still does
+    r = await ev(pg, """(() => { const o = JSON.parse(JSON.stringify(state.people.sam)); const n = Object.assign({}, o, {status:{emoji:'🎧',text:'Focus',at:1}});
+      const m = Object.assign({}, o, {name:'Sammy'}); return [describeChange('person~sam', o, n), describeChange('person~sam', o, m)]; })()""")
+    check("status: no notification for a status change", r[0] is None and r[1] and "profile" in r[1], json.dumps(r))
+    # signed in as Charlie: this phone can't be switched to Sam
+    await ev(pg, "sync.user = {email:'charliepurdomva@gmail.com'}; prefs.user = 'charlie'; ACTIONS.setUser('sam')")
+    check("signed in: Today stays with the signed-in person", await ev(pg, "prefs.user") == "charlie")
+    await ev(pg, "sync.user = null")
+    check("status: no page errors", not pg.errors, "; ".join(pg.errors))
+    await pg.context.close()
+    # forms: radio chips stay small, date box stays inside the sheet
+    pg = await new_page(browser)
+    await ev(pg, "ACTIONS.tab('budget'); ACTIONS.newTxn()")
+    box = await ev(pg, "(() => { const r = document.querySelector('#sheetForm input[name=paidBy]') || document.querySelector('#sheetForm input[type=radio]'); const b = r.getBoundingClientRect(); return [b.width, b.height]; })()")
+    check("forms: who-paid radio is a small circle", box[0] <= 24 and box[1] <= 24, json.dumps(box))
+    over = await ev(pg, "(() => { const d = document.querySelector('#sheetForm input[type=date]'), f = document.querySelector('#sheetForm'); return d.getBoundingClientRect().right - f.getBoundingClientRect().right; })()")
+    check("forms: date box stays inside the sheet", over <= 0.5, over)
+    await pg.locator('#sheetForm input[name=tnote]').first.focus(); await pg.wait_for_timeout(50)
+    check("typing hides the bottom bar", await ev(pg, "getComputedStyle(document.querySelector('nav.nav')).display") == "none")
+    await pg.locator('#sheetForm input[type=radio]').first.focus(); await pg.wait_for_timeout(120)
+    check("…and it comes back after", await ev(pg, "getComputedStyle(document.querySelector('nav.nav')).display") != "none")
+    small = await ev(pg, "[...document.querySelectorAll('#sheetForm input:not([type=radio]):not([type=checkbox]),#sheetForm select')].filter(e => parseFloat(getComputedStyle(e).fontSize) < 16).length")
+    check("forms: text boxes are 16px+ so iPhone doesn't zoom", small == 0, small)
+    await pg.context.close()
+    # older data without statuses, and junk statuses, load fine
+    pg = await new_page(browser, storage={"zendom:data": json.dumps({"version": 9, "people": {"sam": {"name": "Sam"}, "charlie": {"name": "Charlie", "status": {"emoji": 5, "text": {"x": 1}, "at": "nope"}}}})})
+    d = {"people": await ev(pg, "state.people")}
+    check("status: old data gets an empty status", d["people"]["sam"]["status"] == {"emoji": "", "text": "", "at": 0} and "status" not in d["people"]["paprika"], json.dumps(d["people"]["sam"].get("status")))
+    check("status: junk is cleaned up", d["people"]["charlie"]["status"]["at"] == 0 and isinstance(d["people"]["charlie"]["status"]["text"], str))
+    check("status: old data no page errors", not pg.errors, "; ".join(pg.errors))
+    await pg.context.close()
+
+
 async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch()
@@ -748,6 +819,7 @@ async def main():
         await test_drawing(browser)
         await test_calendar_links(browser)
         await test_appointments(browser)
+        await test_status(browser)
         await browser.close()
     failed = [r for r in results if not r[1]]
     print(f"\n{len(results) - len(failed)} of {len(results)} checks passed")
