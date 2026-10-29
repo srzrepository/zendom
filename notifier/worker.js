@@ -97,10 +97,19 @@ export async function whoIs(env, idToken) {
 
 export default {
   async fetch(req, env) {
+    try { return await handle(req, env); }
+    catch (e) { return json({ error: "notifier problem: " + String(e && e.message || e).slice(0, 120) }, 500, env); }
+  }
+};
+
+async function handle(req, env) {
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: {
       "Access-Control-Allow-Origin": env.APP_ORIGIN || "*", "Access-Control-Allow-Methods": "POST", "Access-Control-Allow-Headers": "Content-Type", "Access-Control-Max-Age": "86400" } });
     const url = new URL(req.url);
     if (req.method !== "POST" || url.pathname !== "/notify") return json({ error: "not found" }, 404, env);
+    if (!env.GOOGLE_SA) return json({ error: "the GOOGLE_SA secret isn't set in Cloudflare yet" }, 500, env);
+    try { const sa = JSON.parse(env.GOOGLE_SA); if (!sa.private_key || !sa.client_email) throw 0; }
+    catch (e) { return json({ error: "GOOGLE_SA isn't the whole service account file; paste the entire .json contents" }, 500, env); }
     let msg; try { msg = JSON.parse(await req.text()); } catch (e) { return json({ error: "bad request" }, 400, env); }
     if (!msg || typeof msg.idToken !== "string" || msg.idToken.length > 5000) return json({ error: "sign in first" }, 401, env);
     const email = await whoIs(env, msg.idToken);
@@ -120,5 +129,4 @@ export default {
       if (res === "gone") { gone++; await fetch("https://firestore.googleapis.com/v1/" + d.name, { method: "DELETE", headers: { Authorization: "Bearer " + token } }); }
     }
     return json({ sent, gone }, 200, env);
-  }
-};
+}

@@ -88,5 +88,13 @@ check("answers the browser's pre-check", r.status === 204 && r.headers.get("Acce
 r = await post(null, "GET", "/");
 check("anything else is not found", r.status === 404);
 
+r = await worker.fetch(new Request("https://x.workers.dev/notify", { method: "POST", body: JSON.stringify({ idToken: "tok-sam", body: "hi" }) }), Object.assign({}, env, { GOOGLE_SA: undefined }));
+j = await r.json();
+check("a missing secret is explained, with CORS so the app can show it", r.status === 500 && /GOOGLE_SA secret/.test(j.error) && r.headers.get("Access-Control-Allow-Origin") === env.APP_ORIGIN, JSON.stringify(j));
+r = await worker.fetch(new Request("https://x.workers.dev/notify", { method: "POST", body: JSON.stringify({ idToken: "tok-sam", body: "hi" }) }), Object.assign({}, env, { GOOGLE_SA: "{\"project_id\":\"x\"" }));
+check("a half-pasted secret is explained", /entire \.json/.test((await r.json()).error));
+const realFetch = globalThis.fetch; globalThis.fetch = async () => { throw new Error("network down"); };
+r = await post({ idToken: "tok-sam", body: "hi" }); j = await r.json(); globalThis.fetch = realFetch;
+check("any other failure comes back as a readable message", r.status === 500 && /notifier problem: network down/.test(j.error) && r.headers.get("Access-Control-Allow-Origin") === env.APP_ORIGIN, JSON.stringify(j));
 console.log(`\n${pass} of ${pass + fail} notifier checks passed`);
 process.exit(fail ? 1 : 0);
