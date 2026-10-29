@@ -1,0 +1,15 @@
+// Cloudflare settings for the zen·dom notifier. Cloudflare reads this when it builds from GitHub
+// (Worker → Settings → Builds, root directory: notifier). The name must match the Worker's name.
+// The one secret, GOOGLE_SA, is NOT here: add it in the Worker's Settings → Variables and Secrets.
+{
+  "name": "zendom-notify",
+  "main": "worker.js",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": true,
+  "vars": {
+    "FIREBASE_API_KEY": "AIzaSyAQN7j7SWw0gzZyprK45qx4-IgliQdylE4",
+    "ALLOWED": "samzenteno@gmail.com,charliepurdomva@gmail.com",
+    "APP_ORIGIN": "https://srzrepository.github.io",
+    "APP_URL": "https://srzrepository.github.io/zendom/"
+  }
+}
