@@ -1,12 +1,12 @@
 rules_version = '2';
 // zen·dom: only Sam's and Charlie's Google accounts can read or change anything.
-// Paste this into Firebase console → Firestore → Rules, put in the two emails, then Publish.
+// Paste this into Firebase console → Firestore → Rules, then Publish.
 service cloud.firestore {
   match /databases/{database}/documents {
     function isUs() {
       return request.auth != null
         && request.auth.token.email_verified == true
-        && request.auth.token.email.lower() in ['SAM_EMAIL_HERE', 'CHARLIE_EMAIL_HERE'];
+        && request.auth.token.email.lower() in ['samzenteno@gmail.com', 'charliepurdomva@gmail.com'];
     }
     match /homes/zendom/records/{record} {
       allow read: if isUs();

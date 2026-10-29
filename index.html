@@ -4344,7 +4344,7 @@ document.addEventListener("keydown", e => { if(e.key === "Escape" && $("#sheetRo
    by item. Records are compared by a short hash of their JSON.
    ============================================================ */
 const SYNC_KEY = "zendom:sync";                       // this phone only: {last:{key:hash|null}, ever}
-const ACCOUNTS = {sam:[], charlie:[]};                // Google emails, lowercase: picks who's using
+const ACCOUNTS = {sam:["samzenteno@gmail.com"], charlie:["charliepurdomva@gmail.com"]};              // Google emails, lowercase: picks who's using
 const SYNC_LISTS = [
   ["chore", st => st.chores], ["note", st => st.notes], ["recipe", st => st.recipes], ["meal", st => st.meals],
   ["grocery", st => st.grocery], ["pantry", st => st.pantry], ["event", st => st.events],

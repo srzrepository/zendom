@@ -10,7 +10,7 @@ results = []
 def check(name, ok, detail=""):
     results.append((name, bool(ok))); print(("PASS " if ok else "FAIL ") + name + (f"  [{detail}]" if detail and not ok else ""))
 
-ALLOWED = {"sam@example.com", "charlie@example.com"}
+ALLOWED = {"sam@example.com", "charliepurdomva@gmail.com"}
 class Server:
     def __init__(self): self.recs = {}; self.log = []; self.writes = 0; self.down = False
     def all(self): return [dict(id=k, **{x: v[x] for x in ("del", "j")}) for k, v in self.recs.items()]
@@ -69,12 +69,14 @@ async def main():
         check("first phone uploads its household", len(srv.recs) == n and n > 10, f"{len(srv.recs)} vs {n}")
         check("settings shows the signed-in account", "sam@example.com" in await ev(A, "document.querySelector('#view').innerText"))
 
-        B = await phone(b, srv, "charlie@example.com")
+        B = await phone(b, srv, "charliepurdomva@gmail.com")
+        await ev(B, "prefs.user = 'sam'")
         b_own = await ev(B, "state.chores.map(c => c.id)")
         await ev(B, "ACTIONS.syncIn()"); await settle(A, B)
         a_ids = sorted(await ev(A, "state.chores.map(c => c.id)")); b_ids = sorted(await ev(B, "state.chores.map(c => c.id)"))
         check("second phone joins the shared household instead of uploading its examples", a_ids == b_ids and not set(b_own) & set(a_ids), f"{a_ids} {b_ids}")
         check("second phone keeps its old data as a safety copy", any(k.startswith("zendom:backup:before-first-sync") for k in await ev(B, "Object.keys(localStorage)")))
+        check("Charlie's Google account switches the app to Charlie", await ev(B, "prefs.user") == "charlie")
         check("second phone explains what happened", "shared household" in await ev(B, "document.querySelector('#banners').innerText"))
         check("no duplicate budget categories", len(await ev(B, "state.budget.categories")) == len(await ev(A, "state.budget.categories")))
 
