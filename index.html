@@ -4463,7 +4463,7 @@ function syncFlush(){
 }
 function syncErrText(e){
   const c = e && (e.code || ""), m = String(e && e.message || e || "");
-  if(/permission/i.test(c + m)) return "This Google account isn't allowed into your zen·dom yet. Sign in with the account you gave Claude, or ask to have this one added.";
+  if(/permission/i.test(c + m)) return "The database turned this account away. If it's your or Charlie's Gmail, the database rules probably aren't published yet (Firebase → Firestore → Rules → Publish). Otherwise, sign in with one of those two accounts.";
   if(/unavailable|offline|network/i.test(c + m)) return "Couldn't reach the internet. Changes are kept on this phone and will sync when you're back online.";
   if(/popup-closed|cancelled-popup/i.test(c + m)) return "Sign-in was closed before it finished.";
   if(/popup-blocked/i.test(c + m)) return "The browser blocked the sign-in window. Allow pop-ups for this site, then tap Sign in again.";

@@ -136,7 +136,7 @@ async def main():
         C = await phone(b, Server(), "stranger@example.com")
         srvC = None
         await ev(C, "ACTIONS.syncIn()"); await C.wait_for_timeout(700)
-        check("an account that isn't yours gets a clear message", "isn't allowed" in await ev(C, "sync.err"), await ev(C, "sync.err"))
+        check("an account that isn't yours gets a clear message", "turned this account away" in await ev(C, "sync.err"), await ev(C, "sync.err"))
 
         # sign out keeps data local
         await ev(B, "ACTIONS.syncOut()"); await B.wait_for_timeout(200)
