@@ -3397,6 +3397,12 @@ const RM_ITEMS = {
   balloonP:{pal:{a:"#ff86bf", h:"#ffd1e6", k:"#5a4632"}, rows:[".aaa.", "ahaaa", "ahaaa", "aaaaa", ".aaa.", "..a..", "..k..", "..k..", "...k.", "..k..", "..k..", "...k.", "..k.."]},
   balloonB:{pal:{a:"#7fdcd8", h:"#d8f7f5", k:"#5a4632"}, rows:[".aaa.", "ahaaa", "ahaaa", "aaaaa", ".aaa.", "..a..", "..k..", ".k...", "..k..", "..k..", ".k...", "..k..", "..k.."]},
   cake:{pal:{w:"#fff4ea", p:"#ff86bf", y:"#ffd34d", r:"#ff5c5c", c:"#b0754a"}, rows:["..y.y..", "..r.r..", "wwwwwww", "pwpwpwp", "ccccccc", "wwwwwww", "ccccccc"]},
+  frog:{"pal": {"g": "#7fb35a", "G": "#5e8f40", "o": "#3a5a2a", "w": "#f4f1e6", "k": "#2a2a2a", "b": "#cfe3a0", "m": "#2f4a22"}, "rows": ["..ooo..ooo..", ".oGGGooGGGo.", ".owkwggwkwo.", "oggggggggggo", "oggmmmmmmggo", "ogmggggggmgo", "ogbbbbbbbbgo", "ogbbbbbbbbgo", ".oggoooogg.o", "..oo....oo.."]},
+  skinnyFrog:{"pal": {"l": "#b9df8f", "L": "#94c16a", "o": "#4f7a3a", "w": "#f4f1e6", "k": "#2a2a2a", "p": "#f2a8b4"}, "rows": [".oo.oo.", "owkokwo", "olllllo", "opLLLpo", ".olllo.", "oollloo", "l.lLl.l", "..lll..", "..lLl..", ".ol.lo.", ".l...l.", ".l...l.", "ll...ll"]},
+  mouse:{"pal": {"r": "#adadb4", "R": "#8e8e97", "o": "#5a5a62", "p": "#f2b5c0", "k": "#3a3a40"}, "rows": [".oo...oo....", "oppo.oppo...", "orrooorro...", "orrrrrrrro..", "orkkrrkkrro.", "orrrrprrrro.", "oRrrrrrrrRo.", ".oRRRRRRRo.o", "..ooooooo.o."]},
+  dog:{"pal": {"w": "#f6efe4", "W": "#ddd2c2", "b": "#9a643e", "B": "#6e4529", "o": "#4a3020", "k": "#2a1a14"}, "rows": ["...oooooo...", "..obwwwwwo..", ".obbwwwwwwo.", "BBowkwwkwoBB", "BbBwwkkwwBbB", "BbBwwwwwwBbB", "BbBowwwwoBbB", ".BbBowwoBbB.", "..owbbwwwo..", ".owwbbwwwwo.", ".owwwwwbbwo.", ".oWWWooWWWo.", "..ooo..ooo.."]},
+  jeff:{pal:{p:"#f4a6b8", P:"#d9849b", o:"#9c5468", k:"#3b2a2a", n:"#f9c9d4", N:"#c96f86", b:"#fbd3dc"}, rows:[
+    "..oo....oo..", ".oPpo..oPpo.", ".oppooooppo.", "oppppppppppo", "opkppppppkpo", "obpppnnpppbo", "opppnNNnpppo", "oppppnnppppo", ".oppppppppo.", "oppppppppppo", "oPppo..oppPo", ".ooo....ooo."]},
   papers:{pal:{w:"#fbf8f2", l:"#d9d2c6", y:"#f2d98a", b:"#9cc0e8", r:"#e98a7a", k:"#8a8070"}, rows:[
     "...yyyyyy.....", "..yywwwwwww...", ".wwwwkkkkwwbb.", "wwwwwwwwwwwbbb", "lwwkkkkkwwwwll", "llllllllllllll", ".rrrwwwwwwww..", "wwwwwkkkwwwwww", ".llllllllllll."]},
   takeout:{pal:{w:"#f4f0ea", d:"#d4cec4", r:"#d9534f", k:"#6b4a33"}, rows:["..k..k.", ".wwwww.", "wwrrrww", "dwwwwwd", ".ddddd."]},
@@ -3424,7 +3430,7 @@ function rmSky(h){
   if(h < 17) return {top:"#8fcdf0", bot:"#d4eefb"};
   return {top:"#f3a26f", bot:"#f7d08a", dusk:true};
 }
-const RM_PEOPLE = {"sam": {"pal": {"H": "#3a271f", "h": "#5a3a2a", "c": "#9a6640", "S": "#dba982", "s": "#c48d66", "B": "#e89a86", "E": "#2a1a14", "g": "#b0875e", "M": "#b65e55", "m": "#f7f1ea", "T": "#f4f0ea", "t": "#dcd5cc", "F": "#a3a7ac", "f": "#858a90", "J": "#55709a", "j": "#425a80", "W": "#f6f6f2", "w": "#c9c9c4"}, "rows": [".....HHHHH.....", "....HHHhHHHH...", "...HHHSSSSHHH..", "...HHgSSSgSHH..", "...HgEgggEgHH..", "...HSgSSSgSHH..", "..HHSBSSSBSHHH.", "..HHSSmmmSSHHH.", "..hHHsMMMsHHhH.", "..hcH.sSs.Hchh.", "..cc.TTsTT.cc..", "..cFFTTTTTFFc..", "..FFfTTTTTfFF..", "..FFfTTTTTfFF..", "..FFfTTTTTfFF..", ".JSSJJJJJJJSSJ.", ".JJJJJJjJJJJJJ.", ".jJJJJJ.JJJJJj.", "..jJJj...jJJj..", "...JJ.....JJ...", "...JJ.....JJ...", "...jJ.....Jj...", "..WWW.....WWW..", "..WWw.....wWW.."], "lap": 15}, "charlie": {"pal": {"D": "#2f2119", "d": "#4d3627", "S": "#f2c7aa", "s": "#dba68a", "B": "#ec9c8c", "E": "#2b2b33", "i": "#56708a", "g": "#b9a590", "G": "#a48a73", "M": "#b96a5e", "m": "#f8f1ea", "N": "#2c3a5a", "n": "#3d4f78", "K": "#b9a27b", "k": "#9a8462", "W": "#33302d", "w": "#1f1d1b"}, "rows": ["....dDDDDDd......", "...DDDDDDDDDd....", "..DDDDdDDDDDDD...", "..DDDDDDDDDDSD...", "..DDSSSSSSSSSD...", "..DSSgSSSSgSSS...", "..SSgEgggiEgSS...", "..SSSgSSSSgSSS...", "..sSBSSSSSSBSs...", "...SSSMmmMSSS....", "...sSSSSSSSSs....", ".....sSSSSs......", "..NNNNNssNNNNN...", ".NNNNNNNNNNNNNN..", ".NNnNNNNNNNNnNN..", ".NNnNNNNNNNNnNN..", ".NNnNNNNNNNNnNN..", ".KSSKKKKKKKKSSK..", ".KKKKKKKkKKKKKKK.", ".kKKKKKK.KKKKKkK.", "..kKKKk...kKKKk..", "...KKK.....KKK...", "...KKK.....KKK...", "...kKK.....KKk...", "..WWWW.....WWWW..", "..WWWw.....wWWW.."], "lap": 17}};
+const RM_PEOPLE = {"sam": {"pal": {"o": "#2a1a14", "H": "#4a3026", "h": "#6e4834", "c": "#9a6640", "S": "#e2b28c", "s": "#c8926c", "B": "#eda08c", "E": "#2a1a14", "g": "#9c7a52", "m": "#b97c68", "T": "#f4f0ea", "F": "#a7abb0", "f": "#80858b", "J": "#57739e", "j": "#40587e", "W": "#f2f2ee"}, "lap": 16, "rows": ["....ooooooooo....", "...oHHHHhHHHHo...", "..oHHHhHHHHhHHo..", "..oHHHHSSSHHHHo..", "..oHHSSSSSSSHHo..", "..oHSgSSSSSgSHo..", "..oHgEgSgSgEgHo..", "..oHSgSSSSSgSHo..", "..oHBSSSSSSSBHo..", "..oHcsSSSSSscHo..", "..occo.sSs.occo..", "..ocFTTTsTTTFco..", "..oFFTTTTTTTFFo..", "..oFFTTTTTTTFFo..", "..oFfTTTTTTTfFo..", "..oFfTTTTTTTfFo..", "..oSfJJJJJJJfSo..", "...oJJJJoJJJJo...", "...oJJJjoJjJJo...", "....oJJo.oJJo....", "....oJJo.oJJo....", "....ojJo.oJjo....", "...oWWWo.oWWWo...", "...ooooo.ooooo..."]}, "charlie": {"pal": {"o": "#2a1d16", "D": "#3a281e", "d": "#5e4433", "S": "#f3cbb0", "s": "#dca98d", "B": "#efa192", "E": "#2b2b33", "g": "#a89888", "m": "#c98a7a", "N": "#2f3d5e", "n": "#212b44", "K": "#c2ab82", "k": "#9f895f", "W": "#3a3632"}, "lap": 17, "rows": ["....oo.oooo.o....", "...oDDoDDDDoDo...", "..oDDdDDDDdDDDo..", "..oDDDDdDDDDDDo..", "..oDDDDDDDDSSDo..", "..oDSgSSSSSgSDo..", "..oSgEgSgSgEgSo..", "..oSSgSSSSSgSSo..", "..osBSSSSSSSBso..", "...osSSSSSSSso...", "....osSSSSSso....", ".....oosSsoo.....", "..ooNNNsssNNNoo..", ".oNNNNNNNNNNNNNo.", ".oNNNNNNNNNNNNNo.", ".oNnNNNNNNNNNnNo.", ".oNnNNNNNNNNNnNo.", ".oSnKKKKKKKKKnSo.", "..oKKKKKoKKKKKo..", "..oKKKkKoKkKKKo..", "...oKKKo.oKKKo...", "...oKKKo.oKKKo...", "...okKKo.oKKko...", "..oWWWWo.oWWWWo..", "..oooooo.oooooo.."]}};
 // little seasonal hats (bottom row sits on the top of the hair) and Charlie's vampire collar
 const RM_HATS = {
   witch:{pal:{p:"#5b3a8c", P:"#7a52b0", o:"#f28a2e"}, rows:["......p....", ".....pp....", "....pPp....", "...pPPPp...", "...ooooo...", ".ppppppppp."]},
@@ -3545,11 +3551,11 @@ function rmStatic(opts){
   const jar = jarRows.map((r, i) => i >= 6 - fill && i > 0 && i < 6 ? "g" + "ccc" + "g" : r);
   rmSprite(B, jar, {k:"#c98f5a", g:"#cfe6ee", c:"#ffd34d"}, sh.x + 21, front, shelfZ[1]);
   // top shelf: plush friends
-  rmSprite(B, RM_ITEMS.bunny.rows, RM_ITEMS.bunny.pal, sh.x + 8, front, shelfZ[2]);
-  rmSprite(B, RM_ITEMS.blob.rows, RM_ITEMS.blob.pal, sh.x + 18, front, shelfZ[2]);
+  rmSprite(B, RM_ITEMS.mouse.rows, RM_ITEMS.mouse.pal, sh.x + 8, front, shelfZ[2]);      // sleepy grey mouse
+  rmSprite(B, RM_ITEMS.frog.rows, RM_ITEMS.frog.pal, sh.x + 19, front, shelfZ[2]);       // round grumpy frog
   // on top of the shelf: a lamp and a trailing plant
   rmSprite(B, RM_ITEMS.lamp.rows, RM_ITEMS.lamp.pal, sh.x + 8, 4, sh.h);
-  rmSprite(B, RM_ITEMS.vase.rows, RM_ITEMS.vase.pal, sh.x + 19, 4, sh.h);
+  rmSprite(B, RM_ITEMS.skinnyFrog.rows, RM_ITEMS.skinnyFrog.pal, sh.x + 19, 6, sh.h); // skinny frog on top
 
   // plant (or a christmas tree) in the back-right corner
   rmCyl(B, 110, 9, 0, 5, 8, "#c96f4a", "#e08a5c", ["#5a3a28", 1]);
@@ -3566,6 +3572,7 @@ function rmStatic(opts){
   rmBox(B, {x:S.x, y:8, z:0, w:S.w, d:13, h:8, outline:pal.sofaD, top:(u, v) => Math.abs(u - S.w / 2) < .7 ? sofaD : sofaT, right:sofaD, left:(u, v) => v < 3 ? rc("#6b4a33") : sofa});
   rmBox(B, {x:S.x + 3, y:4, z:8, w:6, d:4, h:7, top:rc("#f6efe4"), left:rc("#e9dfcf"), right:rc("#d4c7b3")}); // pillow
   rmBox(B, {x:S.x - 5, y:2, z:0, w:5, d:19, h:12, outline:pal.sofaD, top:sofaT, right:sofaD, left:sofa});
+  rmSprite(B, RM_ITEMS.frog.rows, RM_ITEMS.frog.pal, S.x - 3, 13, 12);                   // second grumpy frog on the sofa arm
   rmBox(F, {x:S.x + S.w, y:2, z:0, w:5, d:19, h:12, outline:pal.sofaD, top:sofaT, right:sofaD, left:sofa});
 
   // coffee table on the rug, with a mug and a flower (or a cake)
@@ -3576,8 +3583,8 @@ function rmStatic(opts){
   if(season === "birthday") rmSprite(F, RM_ITEMS.cake.rows, RM_ITEMS.cake.pal, T.x + 19, T.y + 6, 8);
   else if(!opts.mess) rmSprite(F, RM_ITEMS.flower.rows, RM_ITEMS.flower.pal, T.x + 18, T.y + 6, 8);
   // a big plush friend sits on the floor next to the sofa
-  rmSprite(F, RM_ITEMS.bear.rows, RM_ITEMS.bear.pal, 108, 30, 0);
-  if(season === "halloween") rmSprite(F, RM_ITEMS.pumpkin.rows, RM_ITEMS.pumpkin.pal, 96, 58, 0);
+  rmSprite(F, RM_ITEMS.dog.rows, RM_ITEMS.dog.pal, 21, 15, 0);                          // spotted dog with curly ears
+  rmSprite(F, RM_ITEMS.jeff.rows, RM_ITEMS.jeff.pal, 108, 30, 0);      // Jeff the money pig, as a plush
   if(season === "birthday"){ rmSprite(F, RM_ITEMS.balloonP.rows, RM_ITEMS.balloonP.pal, S.x - 3, 10, 26); rmSprite(F, RM_ITEMS.balloonB.rows, RM_ITEMS.balloonB.pal, S.x - 1, 14, 24, {dx:4});
     rmSprite(F, RM_ITEMS.balloonP.rows.map(r => r.replace(/a/g, "y").replace(/h/g, "H")), Object.assign({}, RM_ITEMS.balloonP.pal, {y:"#ffd34d", H:"#fff1b8"}), S.x + S.w + 3, 14, 24); }
 
@@ -3611,8 +3618,8 @@ function rmDrawPerson(B, key, x, y, blink, breathe){
       hat.rows.forEach((hr, r) => hr.split("").forEach((ch, c) => { if(ch !== ".") rmSet(B, hl + c, ht + r, rc(hat.pal[ch])); })); }
     if(o === "vampire"){                                           // high black collar with red lining
       const nr = rows.findIndex(r => r.includes("N")) - lift;
-      [[-6, 0], [-5, 0], [-6, -1], [-6, -2], [5, 0], [6, 0], [6, -1], [6, -2]].forEach(([dx, dy]) => rmSet(B, left + Math.floor(w / 2) + dx, top + nr + dy, rc("#1b1b22")));
-      [[-5, -1], [5, -1]].forEach(([dx, dy]) => rmSet(B, left + Math.floor(w / 2) + dx, top + nr + dy, rc("#c0392b")));
+      [[-8, 0], [-8, 1], [-8, 2], [-9, 1], [-9, 2], [8, 0], [8, 1], [8, 2], [9, 1], [9, 2], [-7, -1], [7, -1], [-8, -1], [8, -1]].forEach(([dx, dy]) => rmSet(B, left + Math.floor(w / 2) + dx, top + nr + dy, rc("#1b1b22")));
+      [[-7, 0], [7, 0], [-8, 3], [8, 3]].forEach(([dx, dy]) => rmSet(B, left + Math.floor(w / 2) + dx, top + nr + dy, rc("#c0392b")));
     }
   });
 }
