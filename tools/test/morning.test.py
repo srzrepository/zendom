@@ -37,6 +37,10 @@ check("overdue listed", "Overdue: Take out the trash" in s.get("body", ""), s.ge
 check("skips done and future chores", "Already done" not in s.get("body", "") and "bedsheets" not in s.get("body", ""))
 check("Charlie's version leads with his chore", c.get("body", "").startswith("Yours: Scoop the litter box."), c.get("body"))
 check("remembers it sent today", {"meta": "2026-10-29"} in out)
+p2, out2 = run("2026-10-29T15:20:00Z", recs=records + [{"id": "txn~t1", "data": {"kind": "expense", "amount": 200000, "date": "2026-10-28", "categoryId": None, "paidBy": "charlie", "shared": True, "note": "Rent"}}])
+s2 = {m["to"]: m for m in out2 if "to" in m}
+check("Sam owes half of rent Charlie paid: her morning says to pay him back, no amount", "Pay Charlie back for shared spending" in s2.get("fcm-sam", {}).get("body", "") and "1,000" not in s2.get("fcm-sam", {}).get("body", ""), s2.get("fcm-sam", {}).get("body"))
+check("…and Charlie's doesn't", "Pay" not in s2.get("fcm-charlie", {}).get("body", ""), s2.get("fcm-charlie", {}).get("body"))
 check("fits on a lock screen", all(len(m["body"]) <= 178 for m in sends.values()))
 p, out = run("2026-10-29T16:20:00Z", meta="2026-10-29")
 check("second run the same day sends nothing", not [m for m in out if "to" in m] and "Already sent" in p.stdout, p.stdout)

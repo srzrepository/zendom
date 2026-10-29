@@ -57,7 +57,8 @@ const summary = await pg.evaluate(recs => {
     const bill = x.type === "bill" && state.budget.bills.find(b => b.id === x.id);
     return { type: x.type, text: (bill ? bill.name + " due" : x.title) + (x.time ? " " + fmtTime(x.time) : ""), late: x.flag === "overdue" };
   });
-  return { chores, items, names: { sam: nameOf("sam"), charlie: nameOf("charlie") }, accounts: ACCOUNTS };
+  const o = typeof owed === "function" ? owed() : null;
+  return { chores, items, owe: o ? { from: o.from, to: o.to } : null, names: { sam: nameOf("sam"), charlie: nameOf("charlie") }, accounts: ACCOUNTS };
 }, records);
 await browser.close();
 
@@ -71,6 +72,7 @@ function message(who) {
   const shared = [...theirs.filter(c => !c.late).map(c => c.owner ? `${c.title} (${summary.names[c.owner]})` : c.title), ...summary.items.filter(x => !x.late).map(x => x.text)];
   if (shared.length) parts.push("Also: " + shared.join(", "));
   if (late.length) parts.push("Overdue: " + late.map(x => x.title || x.text).join(", "));
+  if (summary.owe && summary.owe.from === who) parts.push(`Pay ${summary.names[summary.owe.to]} back for shared spending`);
   return parts.length ? cap(parts.join(". ") + ".", 178) : null;
 }
 let sent = 0;

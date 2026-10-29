@@ -220,7 +220,7 @@ button{cursor:pointer}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .two > *{min-width:0}
 /* radio + checkbox chips: the .field input rule must not turn the little circle into a full-size box */
-.chip > input:is([type=radio],[type=checkbox]){width:20px;height:20px;min-height:0;padding:0;margin:0;border:0;flex:none;background:none;box-shadow:none}
+.chip > input:is([type=radio],[type=checkbox]){accent-color:var(--accent);width:20px;height:20px;min-height:0;padding:0;margin:0;border:0;flex:none;background:none;box-shadow:none}
 .chip:has(> input:checked){color:var(--ink);background:var(--surface);box-shadow:inset 0 0 0 2px var(--accent)}
 /* iPhone: date and time boxes have a wide built-in minimum; let them shrink to their column */
 @supports (-webkit-touch-callout:none){
@@ -1441,6 +1441,7 @@ function viewTodayMain(){
   </section>
 
   ${statusCardHTML(me)}
+  ${payBackHTML(me)}
 
   <section class="sec">
     <div class="sec-head"><span class="label">Up next for you</span><button class="link" type="button" data-act="tab" data-id="chores">All chores</button></div>
@@ -2613,6 +2614,20 @@ function balance(){
   });
   return Math.round(b);
 }
+// Who owes whom right now, as a to-do for the person who owes. Null when even.
+function owed(){
+  const b = balance(); if(!b) return null;
+  return b > 0 ? {from:"charlie", to:"sam", cents:b} : {from:"sam", to:"charlie", cents:-b};
+}
+function payBackHTML(me){
+  const o = owed(); if(!o || o.from !== me) return "";
+  const v = (state.budget.venmo || {})[o.to];
+  return `<section class="card soon-card payback"><span class="ic">${IC.budget}</span><div style="flex:1;min-width:0">
+    <h3>Pay ${esc(nameOf(o.to))} back ${money(o.cents)}</h3><p>Your half of shared spending. This goes away when you record the payment.</p>
+    <div class="actions" style="margin-top:8px;justify-content:flex-start">${v ? `<a class="btn ghost small" href="${esc(venmoLink(v, o.cents))}" target="_blank" rel="noopener">Venmo</a>` : ""}
+      <button type="button" class="btn small" data-act="settleUp">I paid</button>
+      <button type="button" class="link" data-act="tab" data-id="budget">See spending</button></div></div></section>`;
+}
 function monthStats(k){
   const tx = state.budget.txns.filter(t => t.date.slice(0, 7) === k);
   const spent = tx.filter(t => t.kind === "expense").reduce((a, t) => a + t.amount, 0);
@@ -3297,11 +3312,62 @@ function eventForm(id, date){
     if(time && !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return fail("etime","Pick a valid time or leave it blank.");
     const who = (form.querySelector("input[name=ewho]:checked") || {}).value || "";
     const data = {title, date, time, who: HUMANS.includes(who) ? who : "", repeat: EV_REPEAT[rep] ? rep : "none", note: form.elements.enote.value.trim().slice(0, 500)};
-    if(e) Object.assign(e, data); else state.events.push(Object.assign({id:uid()}, data));
+    let added = null;
+    if(e) Object.assign(e, data); else { added = Object.assign({id:uid()}, data); state.events.push(added); }
     calDay = date; calMonth = date.slice(0, 7);
     if(!(date >= curCalWeek() && date <= addDays(curCalWeek(), 6))) calWeek = date < todayStr() ? date : (diffDays(todayStr(), date) < 7 ? todayStr() : date);
     save(); closeSheet(); render(); toast(e ? "Event saved" : `Added to ${parse(date).toLocaleDateString(undefined,{weekday:"long", month:"short", day:"numeric"})}`);
+    if(added && healthGuess(added.title)) healthPrompt(added.id);
   });
+}
+// Does an event title sound like a health visit? Returns {name, who} or null. Plain word matching:
+// it will miss some and wrongly suggest others, which is why it always asks.
+const HEALTH_WORDS = [
+  [/\b(vet|vets|veterinar\w*)\b/i, "Wellness exam", "paprika"],
+  [/\b(dentist|dental|teeth|hygienist|orthodont\w*)\b/i, "Dentist cleaning"],
+  [/\b(eye exam|eye doctor|optometr\w*|ophthalm\w*|vision)\b/i, "Eye exam"],
+  [/\b(derm|dermatolog\w*|skin check)\b/i, "Dermatology"],
+  [/\b(physical|annual exam|check-?up|wellness visit|primary care|pcp)\b/i, "Physical"],
+  [/(\bdr\.?\s|\bdoctor\b|\bclinic\b|\bob-?gyn\b|\bgyn\w*|\burgent care\b|\blab work\b|\bblood ?work\b|\bx-?ray\b|\bmri\b|\bspecialist\b|\bphysio\w*|\bcardiolog\w*|\baudiolog\w*|\bdermatolog\w*)/i, ""]
+];
+function healthGuess(title){
+  const t = String(title || "");
+  for(const [re, name, who] of HEALTH_WORDS){ if(re.test(t)) return {name: name || t.replace(/\s+/g, " ").trim().slice(0, 80), who: who || null}; }
+  return null;
+}
+const sameName = (a, b) => a.toLowerCase().replace(/['’]/g, "").trim() === b.toLowerCase().replace(/['’]/g, "").trim();
+function healthPrompt(eventId){
+  const ev = state.events.find(x => x.id === eventId); if(!ev) return;
+  const g = healthGuess(ev.title); if(!g) return;
+  const named = PEOPLE.find(k => new RegExp("\\b" + nameOf(k).replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b", "i").test(ev.title));
+  const who = g.who || named || ev.who || prefs.user;
+  const upcoming = ev.date >= todayStr() && !(ev.date === todayStr() && ev.time && ev.time < new Date().toTimeString().slice(0, 5));
+  const when = parse(ev.date).toLocaleDateString(undefined, {weekday:"short", month:"short", day:"numeric"});
+  openSheet("Add to health history?", `
+    <p style="margin:0">“${esc(ev.title)}” on ${esc(when)} sounds like a health visit.</p>
+    <div class="field"><span class="lab">Whose?</span><div class="seg" role="radiogroup">${PEOPLE.map(k => `<label class="chip" style="cursor:pointer"><input type="radio" name="hwho" value="${k}" ${who === k ? "checked" : ""}> ${esc(nameOf(k))}</label>`).join("")}</div></div>
+    ${field("hname", "Kind of visit", `<input id="hname" name="hname" maxlength="80" value="${esc(g.name)}" autocomplete="off">`, upcoming ? "It becomes the booked appointment for this checkup, and stays on the calendar." : "It's logged as their last visit.")}
+    <div class="actions"><span></span><div class="r"><button type="button" class="btn ghost" data-act="closeSheet">Not now</button><button type="submit" class="btn">Add</button></div></div>`,
+  form => {
+    const k = (form.querySelector("input[name=hwho]:checked") || {}).value, name = val(form, "hname");
+    if(!PEOPLE.includes(k)) return fail("hname", "Pick whose visit it is.");
+    if(!name) return fail("hname", "Name the visit, like Dentist cleaning.");
+    const p = state.people[k], before = JSON.stringify(p.checkups), evBefore = JSON.stringify(state.events);
+    let c = p.checkups.find(x => sameName(x.name, name));
+    if(!c){ c = {id:uid(), name, months:12, last:"", provider:"", next:null}; p.checkups.push(c); }
+    let msg;
+    if(upcoming){
+      c.next = {date: ev.date, time: ev.time, where: (ev.note || "").slice(0, 120)};
+      removeBy(state.events, ev.id);
+      msg = `Booked in ${p.name}'s health history`;
+    } else {
+      if(!c.last || ev.date > c.last) c.last = ev.date;
+      if(c.next && c.next.date === ev.date) c.next = null;
+      msg = `Logged in ${p.name}'s health history`;
+    }
+    save(); closeSheet(); render();
+    toast(msg, () => { p.checkups = JSON.parse(before); state.events = JSON.parse(evBefore); save(); render(); });
+  }, false);
 }
 function normalizeEvents(list){
   return (Array.isArray(list) ? list : []).filter(e => e && typeof e === "object" && str(e.title).trim() && isDate(e.date)).map(e => Object.assign({}, e, {

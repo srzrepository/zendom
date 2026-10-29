@@ -361,6 +361,8 @@ async def test_calendar(pg):
     check("event: empty title rejected", await err_text(pg))
     await fill(pg, {"etitle": "Vet visit", "etime": "14:30"})
     await submit(pg)
+    check("event: a vet visit offers to add it to health history", "Add to health history?" in await ev(pg, "document.querySelector('#sheetTitle').innerText"))
+    await ev(pg, "closeSheet()")
     e = [x for x in (await stored(pg))["events"] if x["title"] == "Vet visit"]
     check("event: add saves", len(e) == 1 and e[0]["date"] == pick)
     check("event: shows on picked day", "Vet visit" in await ev(pg, "document.querySelector('#view').innerText"))
@@ -810,6 +812,51 @@ async def test_status(browser):
     await pg.context.close()
 
 
+async def test_smart(browser):
+    pg = await new_page(browser, clock="2026-11-12T10:00:00-08:00")
+    view = lambda: ev(pg, "document.querySelector('#view').innerText")
+    check("payback: nothing when even", "back $" not in await view())
+    # Charlie pays $2,000 rent, shared -> Sam owes $1,000
+    await ev(pg, "state.budget.txns.push({id:'r1', kind:'expense', amount:200000, date:'2026-11-01', categoryId:null, paidBy:'charlie', shared:true, note:'Rent', billId:null}); save(); ACTIONS.tab('today')")
+    check("payback: Sam's Today says pay Charlie back $1,000", "Pay Charlie back $1,000" in await view(), (await view())[:400])
+    await ev(pg, "prefs.user = 'charlie'; render()")
+    check("payback: not on Charlie's Today", "back $" not in await view())
+    await ev(pg, "prefs.user = 'sam'; render()")
+    await act(pg, "settleUp")
+    check("payback: I paid opens the payment form with the amount", await ev(pg, "document.querySelector('#samt').value") in ("1000", "1000.00", "1,000.00"), await ev(pg, "document.querySelector('#samt').value"))
+    await submit(pg)
+    check("payback: gone once paid", "back $" not in await view())
+    # health spotting
+    await ev(pg, "ACTIONS.tview('week'); ACTIONS.newEvent('2026-11-20')")
+    await fill(pg, {"etitle": "Charlie dentist", "etime": "09:30", "enote": "Dr. Lee, 2nd floor"}); await submit(pg)
+    check("health: a dentist event asks to add it", await sheet_open(pg) and "Add to health history?" in await ev(pg, "document.querySelector('#sheetForm').innerText"))
+    check("health: guesses Charlie from the title and the visit type", await ev(pg, "document.querySelector('input[name=hwho]:checked').value") == "charlie" and await ev(pg, "document.querySelector('#hname').value") == "Dentist cleaning")
+    await submit(pg)
+    d = await stored(pg); c = [x for x in d["people"]["charlie"]["checkups"] if x["name"] == "Dentist cleaning"]
+    check("health: booked as Charlie's next dentist appointment", len(c) == 1 and c[0]["next"] == {"date": "2026-11-20", "time": "09:30", "where": "Dr. Lee, 2nd floor"}, json.dumps(c))
+    check("health: no duplicate on the calendar", not any(e["title"] == "Charlie dentist" for e in d["events"]) and await ev(pg, "calendarItems('2026-11-20','2026-11-20').filter(x => /dentist/i.test(x.title)).length") == 1)
+    await act(pg, "undo")
+    d = await stored(pg)
+    check("health: undo puts the event back", any(e["title"] == "Charlie dentist" for e in d["events"]) and not any(x["name"] == "Dentist cleaning" for x in d["people"]["charlie"]["checkups"]))
+    # vet in the past -> logged for Paprika; 'Not now' leaves things alone
+    await ev(pg, "ACTIONS.newEvent('2026-11-02')"); await fill(pg, {"etitle": "Vet for shots"}); await submit(pg)
+    check("health: vet goes to Paprika", await ev(pg, "document.querySelector('input[name=hwho]:checked').value") == "paprika")
+    await submit(pg)
+    k = [x for x in (await stored(pg))["people"]["paprika"]["checkups"] if x["name"] == "Wellness exam"]
+    check("health: a past visit is logged as the last visit", len(k) == 1 and k[0]["last"] == "2026-11-02" and k[0]["next"] is None, json.dumps(k))
+    n = len((await stored(pg))["events"])
+    await ev(pg, "ACTIONS.newEvent('2026-11-25')"); await fill(pg, {"etitle": "Dr. Patel follow up"}); await submit(pg)
+    await pg.locator('#sheetForm [data-act="closeSheet"]').click(); await pg.wait_for_timeout(60)
+    d = await stored(pg)
+    check("health: Not now keeps just the calendar event", len(d["events"]) == n + 1 and not any(x["name"].startswith("Dr. Patel") for k2 in ("sam","charlie") for x in d["people"][k2]["checkups"]))
+    await ev(pg, "ACTIONS.newEvent('2026-11-26')"); await fill(pg, {"etitle": "Dinner with Mom"}); await submit(pg)
+    check("health: ordinary events don't ask", not await sheet_open(pg))
+    r = await ev(pg, "['Hair appointment','Physical therapy','Eye exam','Derm','Vision check','Team checkup sync'].map(t => healthGuess(t) && healthGuess(t).name)")
+    check("health: word matching behaves as expected (incl. a known false positive)", r == [None, "Physical", "Eye exam", "Dermatology", "Eye exam", "Physical"], json.dumps(r))
+    check("smart: no page errors", not pg.errors, "; ".join(pg.errors))
+    await pg.context.close()
+
+
 async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch()
@@ -820,6 +867,7 @@ async def main():
         await test_calendar_links(browser)
         await test_appointments(browser)
         await test_status(browser)
+        await test_smart(browser)
         await browser.close()
     failed = [r for r in results if not r[1]]
     print(f"\n{len(results) - len(failed)} of {len(results)} checks passed")
