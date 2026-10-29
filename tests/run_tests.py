@@ -16,7 +16,7 @@ def check(name, ok, detail=""):
     print(("PASS " if ok else "FAIL ") + name + (f"  [{detail}]" if detail and not ok else ""))
 
 async def new_page(browser, storage=None, clock=None):
-    ctx = await browser.new_context(viewport={"width": 390, "height": 844})
+    ctx = await browser.new_context(viewport={"width": 390, "height": 844}, timezone_id="America/Los_Angeles", accept_downloads=True)
     # block the Google Fonts request (no network in the test sandbox)
     await ctx.route("**/fonts.googleapis.com/**", lambda r: r.abort())
     await ctx.route("**/fonts.gstatic.com/**", lambda r: r.abort())
@@ -634,6 +634,44 @@ async def test_drawing(browser):
     await pg.context.close()
 
 
+async def test_calendar_links(browser):
+    from urllib.parse import urlparse, parse_qs
+    pg = await new_page(browser, storage={}, clock="2026-10-29T10:00:00-07:00")
+    await ev(pg, "state.events=[{id:'ev1', title:'Vet: Paprika', date:'2026-11-03', time:'14:30', who:'', repeat:'yearly', note:'Bring the carrier, treats; and vax card'}, {id:'ev2', title:'Anniversary', date:'2026-12-31', time:'', who:'', repeat:'none', note:''}]; save(); render()")
+    await act(pg, "tab", "today"); await act(pg, "tview", "week")
+    await ev(pg, "eventForm('ev1')")
+    hrefs = await ev(pg, "[...document.querySelectorAll('#sheetForm a.chip')].map(a => a.href)")
+    check("cal: event form offers Google and two Outlook links", len(hrefs) == 3 and "calendar.google.com" in hrefs[0] and "outlook.office.com" in hrefs[1] and "outlook.live.com" in hrefs[2], str(hrefs))
+    g = parse_qs(urlparse(hrefs[0]).query)
+    # 2:30pm Pacific on Nov 3 2026 is 22:30 UTC (PST, after the Nov 1 change)
+    check("cal: Google link has title, UTC times and the yearly repeat", g["action"] == ["TEMPLATE"] and g["text"] == ["Vet: Paprika"] and g["dates"] == ["20261103T223000Z/20261103T233000Z"] and g["recur"] == ["RRULE:FREQ=YEARLY"] and "treats" in g["details"][0], str(g))
+    o = parse_qs(urlparse(hrefs[1]).query)
+    check("cal: Outlook link has title and UTC start/end", o["subject"] == ["Vet: Paprika"] and o["startdt"] == ["2026-11-03T22:30:00Z"] and o["enddt"] == ["2026-11-03T23:30:00Z"] and o["allday"] == ["false"] and o["rru"] == ["addevent"], str(o))
+    check("cal: repeating event warns Outlook links can't repeat", "can't repeat" in await ev(pg, "document.querySelector('#sheetForm').innerText"))
+    ics = await ev(pg, "icsText(state.events[0])")
+    lines = ics.split("\r\n")
+    check("cal: .ics is a valid single event", lines[0] == "BEGIN:VCALENDAR" and "BEGIN:VEVENT" in lines and lines[-2] == "END:VCALENDAR" and lines[-1] == "" and "DTSTART:20261103T223000Z" in lines and "RRULE:FREQ=YEARLY" in lines, ics[:400])
+    unfolded = ics.replace("\r\n ", "")
+    check("cal: .ics escapes commas, semicolons and new lines", "DESCRIPTION:Bring the carrier\\, treats\\; and vax card\\n\\nFrom zen·dom" in unfolded, unfolded)
+    check("cal: .ics lines are folded under 75 bytes", all(len(l.encode()) <= 75 for l in lines))
+    async with pg.expect_download() as dl:
+        await act(pg, "icsFile", "ev1")
+    d = await dl.value
+    check("cal: tapping Calendar file downloads an .ics", d.suggested_filename == "Vet Paprika.ics", d.suggested_filename)
+    await pg.locator('#sheetForm [data-act=closeSheet]').click()
+    await ev(pg, "eventForm('ev2')")
+    hrefs = await ev(pg, "[...document.querySelectorAll('#sheetForm a.chip')].map(a => a.href)")
+    g = parse_qs(urlparse(hrefs[0]).query); o = parse_qs(urlparse(hrefs[1]).query)
+    check("cal: all-day event uses whole days", g["dates"] == ["20261231/20270101"] and "recur" not in g and o["allday"] == ["true"] and o["startdt"] == ["2026-12-31"], str(g) + str(o))
+    check("cal: all-day .ics uses dates", "DTSTART;VALUE=DATE:20261231" in await ev(pg, "icsText(state.events[1])"))
+    check("cal: no repeat warning on a one-off event", "can't repeat" not in await ev(pg, "document.querySelector('#sheetForm').innerText"))
+    await pg.locator('#sheetForm [data-act=closeSheet]').click()
+    await ev(pg, "eventForm(null, '2026-11-05')")
+    check("cal: new unsaved event shows no calendar links yet", await ev(pg, "document.querySelectorAll('#sheetForm a.chip').length") == 0)
+    check("cal: no page errors", not pg.errors, "; ".join(pg.errors))
+    await pg.context.close()
+
+
 async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch()
@@ -641,6 +679,7 @@ async def main():
         await test_dates(browser)
         await test_dupes(browser)
         await test_drawing(browser)
+        await test_calendar_links(browser)
         await browser.close()
     failed = [r for r in results if not r[1]]
     print(f"\n{len(results) - len(failed)} of {len(results)} checks passed")
