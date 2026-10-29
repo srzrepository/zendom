@@ -472,8 +472,8 @@ async def test_dates(browser):
     s = await stored(pg)
     keys = await ev(pg, "Object.keys(localStorage)")
     b = s["budget"]["bills"][0]
-    check("migration v6->v7: bill kept and anchored to the 31st", s["version"] == 7 and b["name"] == "Rent" and b["amount"] == 250000 and b["anchorDay"] == 31 and b["categoryId"] == "k1")
-    check("migration v6->v7: safety copy made", any(k.startswith("zendom:backup:before-v7") for k in keys))
+    check("migration v6->v7: bill kept and anchored to the 31st", s["version"] == await ev(pg, "SCHEMA") and b["name"] == "Rent" and b["amount"] == 250000 and b["anchorDay"] == 31 and b["categoryId"] == "k1")
+    check("migration v6->v7: safety copy made", any(k.startswith("zendom:backup:before-v") for k in keys))
     # pay it through the UI twice
     await act(pg, "tab", "more"); await act(pg, "mtab", "budget"); await act(pg, "btab", "spending")
     await act(pg, "payBill", "b1"); await act(pg, "payBill", "b1")
@@ -562,12 +562,85 @@ async def test_dupes(browser):
     await pg.context.close()
 
 
+async def draw_line(pg, pts):
+    box = await pg.locator("#drawCanvas").bounding_box()
+    await pg.mouse.move(box["x"] + box["width"] * pts[0][0], box["y"] + box["height"] * pts[0][1])
+    await pg.mouse.down()
+    for x, y in pts[1:]:
+        await pg.mouse.move(box["x"] + box["width"] * x, box["y"] + box["height"] * y, steps=6)
+    await pg.mouse.up(); await pg.wait_for_timeout(40)
+
+async def test_drawing(browser):
+    pg = await new_page(browser, storage={}, clock="2026-10-29T10:00:00-07:00")
+    await act(pg, "tab", "more"); await act(pg, "mtab", "notes")
+    n0 = len((await stored(pg))["notes"])
+    await act(pg, "newDrawing")
+    check("draw: pad opens for a new drawing", await ev(pg, "!!document.querySelector('#drawCanvas') && !document.querySelector('#drawWrap').hidden"))
+    await submit(pg)
+    check("draw: empty drawing and no words rejected", "Draw something" in (await err_text(pg)), await err_text(pg))
+    await draw_line(pg, [(0.1, 0.1), (0.5, 0.5), (0.9, 0.2)])
+    await act(pg, "drawInk", "#4f7fc4"); await act(pg, "drawPen", "24")
+    await draw_line(pg, [(0.2, 0.8), (0.8, 0.8)])
+    await pg.mouse.click(*(lambda b: (b["x"] + b["width"] * 0.5, b["y"] + b["height"] * 0.3))(await pg.locator("#drawCanvas").bounding_box()))
+    await pg.wait_for_timeout(40)
+    check("draw: three strokes including a dot", await ev(pg, "drawPad.strokes.length") == 3)
+    await act(pg, "drawUndo")
+    check("draw: undo removes the last stroke", await ev(pg, "drawPad.strokes.length") == 2)
+    await act(pg, "drawEraser")
+    await draw_line(pg, [(0.2, 0.8), (0.3, 0.8)])
+    check("draw: eraser removes the stroke it touches", await ev(pg, "drawPad.strokes.length") == 1 and await ev(pg, "drawPad.strokes[0].c") == "#3a2214")
+    await act(pg, "drawUndo")
+    check("draw: undo brings an erased stroke back", await ev(pg, "drawPad.strokes.length") == 2)
+    await act(pg, "drawClear"); await act(pg, "drawUndo")
+    check("draw: clear can be undone", await ev(pg, "drawPad.strokes.length") == 2)
+    await submit(pg)
+    s = await stored(pg)
+    dn = [n for n in s["notes"] if n.get("drawing")]
+    check("draw: drawing-only note saves", len(s["notes"]) == n0 + 1 and len(dn) == 1 and dn[0]["text"] == "" and len(dn[0]["drawing"]["strokes"]) == 2)
+    st = dn[0]["drawing"]["strokes"]
+    check("draw: strokes keep color, width and in-bounds points", st[0]["c"] == "#3a2214" and st[0]["w"] == 10 and st[1]["c"] == "#4f7fc4" and st[1]["w"] == 24 and all(0 <= v <= 1000 for x in st for v in x["p"]) and len(st[0]["p"]) >= 6)
+    check("draw: board shows the drawing", await ev(pg, f"!!document.querySelector('[data-act=openNote][data-id=\"{dn[0]['id']}\"] svg.drawing path')"))
+    nid = dn[0]["id"]
+    await act(pg, "openNote", nid)
+    check("draw: note detail shows the drawing", await ev(pg, "document.querySelectorAll('#sheetRoot svg.drawing path').length") == 2)
+    await act(pg, "editNote", nid)
+    check("draw: editing opens the pad with the drawing", await ev(pg, "!document.querySelector('#drawWrap').hidden && drawPad.strokes.length") == 2)
+    await fill(pg, {"text": "tacos tonight?"})
+    await draw_line(pg, [(0.6, 0.6), (0.7, 0.7)])
+    await submit(pg)
+    n = next(x for x in (await stored(pg))["notes"] if x["id"] == nid)
+    check("draw: edit adds words and a stroke", n["text"] == "tacos tonight?" and len(n["drawing"]["strokes"]) == 3)
+    await act(pg, "newNote")
+    check("draw: plain new note keeps the pad closed", await ev(pg, "document.querySelector('#drawWrap').hidden"))
+    await submit(pg)
+    check("draw: empty plain note still rejected", "words or a drawing" in (await err_text(pg)))
+    await act(pg, "drawOpen")
+    check("draw: Add a drawing opens the pad", await ev(pg, "!document.querySelector('#drawWrap').hidden"))
+    await pg.locator('#sheetForm [data-act=closeSheet]').click()
+    # bad stored data is cleaned, not trusted
+    await ev(pg, "state.notes.push({id:'bad', text:'', drawing:{strokes:[{c:'red;}<script>', w:999, p:[5,5,99999,-4,'x',3]}]}, author:'sam'}); save()")
+    await pg.reload(); await pg.wait_for_timeout(250)
+    bad = await ev(pg, "state.notes.find(x => x.id === 'bad') || null")   # cleaned in memory on load
+    check("draw: unsafe ink never reaches the page", await ev(pg, "!document.body.innerHTML.includes('red;}<script>')"))
+    check("draw: unsafe colors and sizes cleaned on load", bad and bad["drawing"]["strokes"][0]["c"] == "#3a2214" and bad["drawing"]["strokes"][0]["w"] == 10 and bad["drawing"]["strokes"][0]["p"] == [5, 5, 1000, 0], json.dumps(bad))
+    check("draw: drawing survives reload", any(x["id"] == nid and len(x["drawing"]["strokes"]) == 3 for x in (await stored(pg))["notes"]))
+    check("draw: no page errors", not pg.errors, "; ".join(pg.errors))
+    await pg.context.close()
+    # v7 notes upgrade to v8 untouched
+    v7 = {"version": 7, "notes": [{"id": "n1", "text": "old note", "author": "charlie", "color": "mint"}]}
+    pg = await new_page(browser, storage={"zendom:data": json.dumps(v7)}, clock="2026-10-29T10:00:00-07:00")
+    s = await stored(pg)
+    check("migration v7->v8: notes kept, no drawing added", s["version"] == 8 and s["notes"][0]["text"] == "old note" and s["notes"][0]["drawing"] is None)
+    await pg.context.close()
+
+
 async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch()
         await run_all(browser)
         await test_dates(browser)
         await test_dupes(browser)
+        await test_drawing(browser)
         await browser.close()
     failed = [r for r in results if not r[1]]
     print(f"\n{len(results) - len(failed)} of {len(results)} checks passed")
