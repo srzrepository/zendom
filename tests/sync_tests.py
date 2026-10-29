@@ -108,6 +108,23 @@ async def main():
         ta = await ev(A, f"state.chores.find(c => c.id === '{c1}').title"); tb = await ev(B, f"state.chores.find(c => c.id === '{c1}').title")
         check("same chore edited on both phones: they end up agreeing", ta == tb and ta in ("Sam wins?", "Charlie wins?"), f"{ta} / {tb}")
 
+        # an edit form open on one phone while the other phone changes things
+        await ev(A, f"ACTIONS.tab('chores'); ACTIONS.filter('all'); choreForm('{c2}')")
+        await A.fill("#title", "Sam typed this while Charlie was busy")
+        await ev(B, f"state.chores.find(c => c.id === '{c1}').title = 'Charlie, meanwhile'; save()")
+        await settle(A, B)
+        check("an open form survives a change arriving from the other phone", await ev(A, "!!document.querySelector('#sheetForm')") and await ev(A, "document.querySelector('#title').value") == "Sam typed this while Charlie was busy")
+        await A.locator('#sheetForm button[type=submit]').click(); await settle(A, B)
+        for X, nm in ((A, "Sam"), (B, "Charlie")):
+            t = await ev(X, f"[state.chores.find(c => c.id === '{c2}').title, state.chores.find(c => c.id === '{c1}').title]")
+            check(f"saving that form keeps both people's changes ({nm}'s phone)", t == ["Sam typed this while Charlie was busy", "Charlie, meanwhile"], str(t))
+        # same chore: Charlie saves while Sam is mid-edit; Sam's later Save wins everywhere
+        await ev(A, f"choreForm('{c1}')"); await A.fill("#title", "Sam's version")
+        await ev(B, f"state.chores.find(c => c.id === '{c1}').title = 'Charlie version'; save()"); await settle(A, B)
+        await A.locator('#sheetForm button[type=submit]').click(); await settle(A, B)
+        ta, tb = await ev(A, f"state.chores.find(c => c.id === '{c1}').title"), await ev(B, f"state.chores.find(c => c.id === '{c1}').title")
+        check("same chore: the later Save wins on both phones", ta == "Sam's version" and tb == "Sam's version", f"{ta} / {tb}")
+
         # drawings and budget travel too
         await ev(B, "state.notes.push({id:'dr1', text:'', drawing:{strokes:[{c:'#4f7fc4', w:10, p:[10,10,500,400]}]}, color:'mint', pinned:true, author:'charlie', created:1, updated:1, reactions:[], replies:[]}); save()")
         await ev(A, "state.budget.fund.entries.push({id:'fe1', kind:'in', amount:2500, who:'sam', place:'Cash jar', date:'2026-10-29', note:'', goalId:'', toPlace:'', created:1}); save()")

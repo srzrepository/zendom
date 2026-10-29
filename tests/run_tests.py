@@ -642,7 +642,7 @@ async def test_drawing(browser):
     v7 = {"version": 7, "notes": [{"id": "n1", "text": "old note", "author": "charlie", "color": "mint"}]}
     pg = await new_page(browser, storage={"zendom:data": json.dumps(v7)}, clock="2026-10-29T10:00:00-07:00")
     s = await stored(pg)
-    check("migration v7->v8: notes kept, no drawing added", s["version"] == 8 and s["notes"][0]["text"] == "old note" and s["notes"][0]["drawing"] is None)
+    check("migration v7->v8: notes kept, no drawing added", s["version"] == await ev(pg, "SCHEMA") and s["notes"][0]["text"] == "old note" and s["notes"][0]["drawing"] is None)
     await pg.context.close()
 
 
@@ -684,6 +684,61 @@ async def test_calendar_links(browser):
     await pg.context.close()
 
 
+async def test_appointments(browser):
+    pg = await new_page(browser, storage={}, clock="2026-10-29T10:00:00-07:00")
+    await act(pg, "tab", "more"); await act(pg, "mtab", "family"); await act(pg, "fam", "sam")
+    await act(pg, "editCheckup")
+    await fill(pg, {"cname": "Dentist cleaning", "months": "6", "last": "2026-04-20", "ndate": "2026-10-01"})
+    await submit(pg)
+    check("appt: booking a past date is refused", "already happened" in await err_text(pg), await err_text(pg))
+    await fill(pg, {"ndate": "", "ntime": "09:15"})
+    await submit(pg)
+    check("appt: a time without a date is refused", "Add the date" in await err_text(pg))
+    await fill(pg, {"ndate": "2026-11-04", "ntime": "09:15", "nwhere": "Dr. Lee, 2nd floor"})
+    await submit(pg)
+    c = (await stored(pg))["people"]["sam"]["checkups"][0]
+    check("appt: booking saves date, time and place", c["next"] == {"date": "2026-11-04", "time": "09:15", "where": "Dr. Lee, 2nd floor"} and c["last"] == "2026-04-20", json.dumps(c))
+    check("appt: toast says it's booked", "Booked for" in await ev(pg, "document.querySelector('#toastRoot').innerText"))
+    check("appt: list shows the booking", "Booked Nov 4" in await ev(pg, "document.querySelector('#view').innerText"))
+    items = await ev(pg, "calendarItems('2026-11-01','2026-11-30').filter(x => x.type === 'health').map(x => [x.date, x.title, x.time || ''])")
+    check("appt: calendar shows it on the booked day with its time", ["2026-11-04", "Sam: Dentist cleaning", "09:15"] in items, str(items))
+    await ev(pg, "ACTIONS.tab('today'); ACTIONS.tview('today')")
+    check("appt: Today's health heads-up lists it within a week", "Booked Nov 4" in await ev(pg, "document.querySelector('#view').innerText"))
+    await ev(pg, "ACTIONS.goFam('sam')")
+    await act(pg, "editCheckup", c["id"])
+    hrefs = await ev(pg, "[...document.querySelectorAll('#sheetForm a.chip')].map(a => a.href)")
+    check("appt: add-to-calendar links appear for a booking", len(hrefs) == 3 and "Dentist" in hrefs[0])
+    async with pg.expect_download() as dl:
+        await act(pg, "icsFile", "appt~" + c["id"])
+    check("appt: calendar file for the appointment", (await dl.value).suggested_filename.startswith("Sam Dentist"))
+    await fill(pg, {"ndate": "2026-11-12", "ntime": "16:00"})
+    await submit(pg)
+    check("appt: reschedule moves it", (await stored(pg))["people"]["sam"]["checkups"][0]["next"]["date"] == "2026-11-12" and "Rescheduled" in await ev(pg, "document.querySelector('#toastRoot').innerText"))
+    await act(pg, "editCheckup", c["id"])
+    await act(pg, "apptCancel", c["id"])
+    check("appt: cancel clears it", (await stored(pg))["people"]["sam"]["checkups"][0]["next"] is None)
+    await act(pg, "undo")
+    check("appt: cancel can be undone", (await stored(pg))["people"]["sam"]["checkups"][0]["next"]["date"] == "2026-11-12")
+    # it happened: jump the clock past the appointment
+    await pg.context.close()
+    data = await stored(pg) if False else None
+    pg2 = await new_page(browser, storage={"zendom:data": json.dumps({"version": 9, "people": {"sam": {"name": "Sam", "checkups": [{"id": "k1", "name": "Eye exam", "months": 12, "last": "2025-10-01", "provider": "", "next": {"date": "2026-10-27", "time": "", "where": ""}}]}}})}, clock="2026-10-29T10:00:00-07:00")
+    await ev(pg2, "ACTIONS.goFam('sam')")
+    check("appt: a passed booking asks if it happened", "Did it happen?" in await ev(pg2, "document.querySelector('#view').innerText"))
+    await act(pg2, "editCheckup", "k1")
+    await act(pg2, "apptDone", "k1")
+    k = (await stored(pg2))["people"]["sam"]["checkups"][0]
+    check("appt: Mark as done logs the visit on its date", k["last"] == "2026-10-27" and k["next"] is None, json.dumps(k))
+    check("appt: and says when the next one is due", "next due around Oct 27, 2027" in await ev(pg2, "document.querySelector('#toastRoot').innerText"))
+    check("appt: no page errors", not pg2.errors, "; ".join(pg2.errors))
+    await pg2.context.close()
+    # older data upgrades without inventing appointments
+    pg3 = await new_page(browser, storage={"zendom:data": json.dumps({"version": 8, "people": {"sam": {"name": "Sam", "checkups": [{"id": "k2", "name": "Physical", "months": 12, "last": "2026-01-10"}]}}})}, clock="2026-10-29T10:00:00-07:00")
+    k = (await stored(pg3))["people"]["sam"]["checkups"][0]
+    check("migration v8->v9: checkups kept, nothing booked", (await stored(pg3))["version"] == 9 and k["last"] == "2026-01-10" and k["next"] is None)
+    await pg3.context.close()
+
+
 async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch()
@@ -692,6 +747,7 @@ async def main():
         await test_dupes(browser)
         await test_drawing(browser)
         await test_calendar_links(browser)
+        await test_appointments(browser)
         await browser.close()
     failed = [r for r in results if not r[1]]
     print(f"\n{len(results) - len(failed)} of {len(results)} checks passed")
