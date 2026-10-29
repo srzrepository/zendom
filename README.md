@@ -7,3 +7,6 @@ A calm household app for Sam and Charlie: chores (Fair Play cards), kitchen (rec
 - `firestore.rules` — database rules: only our two Google accounts.
 - `tests/run_tests.py` and `tests/sync_tests.py` — end-to-end checks in headless Chromium.
 - `tests/patch_step*.py` — each change, applied in order.
+- `firebase-messaging-sw.js` — background helper that shows notifications when the app is closed (bundled from `tools/sw-entry.js`).
+- `notifier/worker.js` — the Cloudflare Worker that sends "notes and nudges" to the other person's opted-in phones. Tests: `node notifier/worker.test.mjs`.
+- `tools/morning.mjs` + `.github/workflows/morning.yml` — morning reminders, run by GitHub on a schedule. Tests: `python3 tools/test/morning.test.py`.

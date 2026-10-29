@@ -12,7 +12,7 @@ def check(name, ok, detail=""):
 
 ALLOWED = {"sam@example.com", "charliepurdomva@gmail.com"}
 class Server:
-    def __init__(self): self.recs = {}; self.log = []; self.writes = 0; self.down = False
+    def __init__(self): self.recs = {}; self.log = []; self.writes = 0; self.down = False; self.devices = {}; self.notified = []
     def all(self): return [dict(id=k, **{x: v[x] for x in ("del", "j")}) for k, v in self.recs.items()]
     def write(self, lst, email):
         if self.down: raise Exception("unavailable: network down")
@@ -32,20 +32,39 @@ window.zdBackend = {
   async signOut(){ this._u = null; this._cbs.forEach(c => c(null)); },
   async fetchAll(){ return await window.__srvAll(); },
   async write(list){ await window.__srvWrite(list, this._u ? this._u.email : ""); },
+  async idToken(){ return this._u ? "tok-" + this._u.email : null; },
+  push: {
+    _perm: "default",
+    async supported(){ return true; },
+    permission(){ return this._perm; },
+    async enable(v){ window.__enableCalls = (window.__enableCalls || 0) + 1; if(window.__deny){ const e = new Error("no"); e.code = "denied"; throw e; } this._perm = "granted"; return "fcm-" + window.__email; },
+    async disable(){ window.__disabled = (window.__disabled || 0) + 1; },
+    async saveDevice(id, d){ await window.__srvDevice(id, d); },
+    async removeDevice(id){ await window.__srvDevice(id, null); },
+    onForeground(){ return () => {}; }
+  },
   listen(cb){ let cur = 0, busy = false; const t = setInterval(async () => { if(busy) return; busy = true;
       try { const r = await window.__srvSince(cur); cur = r.cur; if(r.changes.length) cb(r.changes); } finally { busy = false; } }, 100);
     return () => clearInterval(t); }
 };
 """
 
-async def phone(browser, srv, email, clock="2026-10-29T10:00:00-07:00"):
-    ctx = await browser.new_context(viewport={"width": 390, "height": 844})
+async def phone(browser, srv, email, clock="2026-10-29T10:00:00-07:00", ua=None):
+    ctx = await browser.new_context(viewport={"width": 390, "height": 844}, **({"user_agent": ua} if ua else {}))
     await ctx.route("**/fonts.g*/**", lambda r: r.abort())
     await ctx.expose_function("__srvAll", lambda: srv.all())
     def _w(lst, em):
         srv.write(lst, em)
     await ctx.expose_function("__srvWrite", _w)
     await ctx.expose_function("__srvSince", lambda cur: srv.since(cur))
+    def _dev(i, d):
+        if d is None: srv.devices.pop(i, None)
+        else: srv.devices[i] = d
+    await ctx.expose_function("__srvDevice", _dev)
+    async def _notify(route):
+        b = json.loads(route.request.post_data or "{}"); b["_ct"] = route.request.headers.get("content-type", ""); srv.notified.append(b)
+        await route.fulfill(status=200, content_type="application/json", body=json.dumps({"sent": 1, "gone": 0}))
+    await ctx.route("https://notify.test/**", _notify)
     await ctx.add_init_script(f"window.__email = {json.dumps(email)};" + FAKE)
     pg = await ctx.new_page(); pg.errors = []
     pg.on("pageerror", lambda e: pg.errors.append(str(e)))
@@ -160,6 +179,65 @@ async def main():
         check("signing out stops syncing and keeps the data", await ev(B, "sync.status") == "off" and await ev(B, "state.chores.some(c => c.id === 'shared1')"))
         for X, nm in ((A, "Sam"), (B, "Charlie"), (C, "stranger")):
             check(f"no page errors ({nm})", not X.errors, "; ".join(X.errors)[:300])
+
+        # ---------- notifications ----------
+        srvN = Server()
+        S = await phone(b, srvN, "sam@example.com"); await ev(S, "ACTIONS.syncIn()"); await settle(S)
+        await ev(S, "ACTIONS.tab('more'); ACTIONS.mtab('settings')")
+        check("notify: before setup, says it's almost ready and asks nothing", "almost ready" in await ev(S, "document.querySelector('#view').innerText") and not await ev(S, "window.__enableCalls || 0"))
+        await ev(S, "state.notes.push({id:'n-pre', text:'before setup', color:'mint', pinned:false, author:'sam', created:1, updated:1, reactions:[], replies:[]}); save()"); await S.wait_for_timeout(2200)
+        check("notify: nothing is sent before setup", not srvN.notified)
+        K = await phone(b, srvN, "charliepurdomva@gmail.com"); await ev(K, "ACTIONS.syncIn()"); await settle(S, K)
+        for X in (S, K): await ev(X, "NOTIFY.url = 'https://notify.test'; NOTIFY.vapid = 'VAPID'; ACTIONS.tab('more'); ACTIONS.mtab('settings')")
+        check("notify: both switches start off", await ev(S, "[...document.querySelectorAll('[data-change=pushPref]')].map(x => x.checked).join()") == "false,false")
+        check("notify: no permission asked until a switch is tapped", not await ev(S, "window.__enableCalls || 0"))
+        await S.locator("[data-change=pushPref][data-id=instant]").check(); await S.wait_for_timeout(200)
+        dev = list(srvN.devices.values())
+        check("notify: turning one on asks permission and saves only this phone", await ev(S, "window.__enableCalls") == 1 and len(dev) == 1 and dev[0]["owner"] == "sam@example.com" and dev[0]["instant"] is True and dev[0]["morning"] is False, json.dumps(dev))
+        check("notify: test button appears once on", await ev(S, "!!document.querySelector('[data-act=pushTest]')"))
+        await K.locator("[data-change=pushPref][data-id=morning]").check(); await K.wait_for_timeout(200)
+        check("notify: Charlie chooses separately (morning only)", sorted((d["owner"], d["instant"], d["morning"]) for d in srvN.devices.values()) == [("charliepurdomva@gmail.com", False, True), ("sam@example.com", True, False)])
+        # notes go out right away
+        srvN.notified.clear()
+        await ev(K, "state.notes.push({id:'n-k', text:'tacos tonight?', color:'mint', pinned:false, author:'charlie', created:2, updated:2, reactions:[], replies:[]}); save()")
+        await K.wait_for_timeout(2400)
+        check("notify: Charlie's new note goes out within seconds", len(srvN.notified) == 1 and srvN.notified[0]["body"] == "Charlie left a note: “tacos tonight?”" and srvN.notified[0]["idToken"] == "tok-charliepurdomva@gmail.com", json.dumps(srvN.notified))
+        check("notify: sent as a simple request (works while the app closes)", srvN.notified and srvN.notified[0]["_ct"].startswith("text/plain"))
+        check("notify: no pop-up for notes", not await ev(K, "document.querySelector('#nudgeRoot').innerHTML"))
+        await settle(S, K)
+        await ev(S, "const n = state.notes.find(x => x.id === 'n-k'); n.replies.push({id:'r1', by:'sam', text:'YES', at:3}); save()"); await S.wait_for_timeout(2400)
+        check("notify: a reply goes out too", srvN.notified[-1]["body"] == "Sam replied to a note: “YES”", srvN.notified[-1]["body"])
+        # other changes ask first
+        srvN.notified.clear()
+        cid = (await ev(K, "state.chores.map(c => c.id)"))[0]
+        await ev(K, f"ACTIONS.tab('chores'); ACTIONS.filter('all'); toggleChore('{cid}')"); await K.wait_for_timeout(700)
+        check("notify: finishing a chore shows a 'Tell Sam?' pop-up", "Tell Sam?" in await ev(K, "document.querySelector('#nudgeRoot').innerText"))
+        check("notify: and sends nothing by itself", not srvN.notified)
+        await K.locator("#nudgeRoot [data-act=nudgeSend]").click(); await K.wait_for_timeout(300)
+        title = await ev(K, f"state.chores.find(c => c.id === '{cid}').title")
+        check("notify: tapping Notify sends it", len(srvN.notified) == 1 and srvN.notified[0]["body"] == f"Charlie finished “{title}”", json.dumps(srvN.notified))
+        check("notify: and confirms", "Sam was notified" in await ev(K, "document.querySelector('#toastRoot').innerText"))
+        await ev(K, "state.people.paprika.vet = 'Bay Vet'; save()"); await K.wait_for_timeout(700)
+        await K.locator("#nudgeRoot [data-act=nudgeClose]").click(); await K.wait_for_timeout(200)
+        check("notify: dismissing the pop-up sends nothing", len(srvN.notified) == 1 and not await ev(K, "document.querySelector('#nudgeRoot').innerHTML"))
+        check("notify: health changes are described vaguely", await ev(K, "describeChange('person~paprika', {name:'Paprika', meds:[]}, {name:'Paprika', meds:[{name:'Gabapentin'}]})") == "updated Paprika's profile")
+        check("notify: spending is described without amounts", await ev(K, "describeChange('txn~t1', null, {kind:'expense', amount:4500, note:'Vet'})") == "logged spending")
+        # off again, denied, sign-out
+        await ev(S, "ACTIONS.tab('more'); ACTIONS.mtab('settings')")
+        await S.locator("[data-change=pushPref][data-id=instant]").uncheck(); await S.wait_for_timeout(200)
+        check("notify: turning everything off forgets this phone", all(d["owner"] != "sam@example.com" for d in srvN.devices.values()) and await ev(S, "window.__disabled") == 1 and not await ev(S, "localStorage.getItem('zendom:push')"))
+        await ev(S, "window.__deny = true; zdBackend.push._perm = 'denied'")
+        await S.locator("[data-change=pushPref][data-id=morning]").click(); await S.wait_for_timeout(200)
+        check("notify: a refused permission leaves the switch off", await ev(S, "document.querySelector('[data-change=pushPref][data-id=morning]').checked") is False and not srvN.devices.get("x"))
+        check("notify: if permission is refused, it says how to allow it", "blocked" in await ev(S, "document.querySelector('#view').innerText"))
+        await ev(K, "ACTIONS.syncOut()"); await K.wait_for_timeout(300)
+        check("notify: signing out forgets that phone too", not srvN.devices)
+        I = await phone(b, srvN, "sam@example.com", ua="Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1")
+        await ev(I, "ACTIONS.syncIn()"); await settle(I)
+        await ev(I, "NOTIFY.url = 'https://notify.test'; NOTIFY.vapid = 'VAPID'; ACTIONS.tab('more'); ACTIONS.mtab('settings')")
+        check("notify: iPhone in Safari is told to use the Home Screen app", "only work in the Home Screen app" in await ev(I, "document.querySelector('#view').innerText") and not await ev(I, "!!document.querySelector('[data-change=pushPref]')"))
+        for X, nm in ((S, "Sam"), (K, "Charlie"), (I, "iPhone")):
+            check(f"notify: no page errors ({nm})", not X.errors, "; ".join(X.errors)[:300])
 
         # without the website's backend: honest note, no sign-in button
         ctx = await b.new_context(); pg = await ctx.new_page(); await pg.goto("file://" + PAGE); await pg.wait_for_timeout(300)

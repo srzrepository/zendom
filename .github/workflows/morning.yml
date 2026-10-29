@@ -1,0 +1,29 @@
+name: Morning reminders
+# Runs twice so it lands near 8:20 am Pacific in both summer and winter time; the script sends only once a day.
+on:
+  schedule:
+    - cron: "20 15 * * *"
+    - cron: "20 16 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Send now, even outside 8 am to noon or if already sent today"
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  remind:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-save --no-package-lock playwright@1.63.0
+      - run: npx playwright install --with-deps chromium
+      - run: node tools/morning.mjs
+        env:
+          GOOGLE_SA: ${{ secrets.GOOGLE_SA }}
+          FORCE: ${{ inputs.force && '1' || '' }}

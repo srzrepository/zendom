@@ -15,6 +15,20 @@ service cloud.firestore {
         && request.resource.data.j is string
         && request.resource.data.j.size() < 900000;
     }
+    // phones that turned on notifications: each phone can only add, change or remove its own entry.
+    // Nobody reads these from the app; the notifier and the morning job read them with the service account.
+    function myEmail() { return request.auth.token.email.lower(); }
+    function goodDevice() {
+      return request.resource.data.keys().hasOnly(['owner', 'token', 'instant', 'morning', 'kind', 'updated'])
+        && request.resource.data.owner == myEmail()
+        && request.resource.data.token is string && request.resource.data.token.size() < 4096
+        && request.resource.data.instant is bool && request.resource.data.morning is bool;
+    }
+    match /homes/zendom/devices/{device} {
+      allow create: if isUs() && goodDevice();
+      allow update: if isUs() && goodDevice() && resource.data.owner == myEmail();
+      allow delete: if isUs() && resource.data.owner == myEmail();
+    }
     // everything else stays closed
     match /{document=**} {
       allow read, write: if false;
