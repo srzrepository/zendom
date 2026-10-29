@@ -182,7 +182,7 @@ async def main():
 
         # ---------- notifications ----------
         srvN = Server()
-        S = await phone(b, srvN, "sam@example.com"); await ev(S, "ACTIONS.syncIn()"); await settle(S)
+        S = await phone(b, srvN, "sam@example.com"); await ev(S, "NOTIFY.url = ''; NOTIFY.vapid = ''"); await ev(S, "ACTIONS.syncIn()"); await settle(S)
         await ev(S, "ACTIONS.tab('more'); ACTIONS.mtab('settings')")
         check("notify: before setup, says it's almost ready and asks nothing", "almost ready" in await ev(S, "document.querySelector('#view').innerText") and not await ev(S, "window.__enableCalls || 0"))
         await ev(S, "state.notes.push({id:'n-pre', text:'before setup', color:'mint', pinned:false, author:'sam', created:1, updated:1, reactions:[], replies:[]}); save()"); await S.wait_for_timeout(2200)
