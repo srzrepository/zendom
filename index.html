@@ -2097,6 +2097,18 @@ function parseRecipeText(txt){
 }
 
 /* ---- forms ---- */
+const titleKey = t => String(t || "").toLowerCase().replace(/['‘’`]/g, "").replace(/&/g, " and ").replace(/[^a-z0-9]+/g, " ").trim();
+const sourceKey = u => String(u || "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/#.*$/, "").replace(/\/+$/, "");
+// Another recipe with the same name (ignoring case and punctuation) or the same source link
+function findDuplicateRecipe(title, source, exceptId){
+  const tk = titleKey(title), sk = sourceKey(source);
+  for(const x of state.recipes){
+    if(x.id === exceptId) continue;
+    if(sk && sourceKey(x.source) === sk) return {r:x, why:"from the same link"};
+    if(tk && titleKey(x.title) === tk) return {r:x, why:"with this name"};
+  }
+  return null;
+}
 function recipeForm(id, focusPaste, preset){
   const r = id ? state.recipes.find(x => x.id === id) : null; if(id && !r) return;
   const d = r || {title:"", servings:4, prep:"", cook:"", categories:[], ingredients:[], steps:[], notes:"", source:""};
@@ -2129,6 +2141,9 @@ function recipeForm(id, focusPaste, preset){
     const data = {title:title.slice(0,100), servings:+sv, prep:val(form,"prep"), cook:val(form,"cook"),
       categories:[...new Set(val(form,"cats").split(",").map(c => c.trim()).filter(Boolean))].slice(0,8),
       ingredients:lines("ings").map(l => l.slice(0,200)), steps:lines("steps").map(l => l.slice(0,1000)), notes:form.elements.rnotes.value.trim().slice(0,2000), source:src};
+    const unchanged = r && titleKey(r.title) === titleKey(data.title) && sourceKey(r.source) === sourceKey(data.source);   // editing other fields doesn't re-warn
+    const dup = unchanged ? null : findDuplicateRecipe(data.title, data.source, r && r.id);
+    if(dup && warnDuplicate(form, dup.why === "with this name" ? "rtitle" : "source", dup.r.id, `You already have a recipe ${dup.why}: “${dup.r.title}”. Tap Save again to keep both.`, "openDupRecipe", dup.r.id)) return;
     if(r){ Object.assign(r, data); r.example = false; if(cookState[r.id]) cookState[r.id].target = r.servings; }
     else state.recipes.push(Object.assign({id:uid(), favorite:false, example:false, created:Date.now(), cooked:[], photos:[], pdf: preset && pendingPdf ? pendingPdf.id : "", pdfName: preset && pendingPdf ? pendingPdf.name : ""}, data));
     if(preset) pendingPdf = null;   // kept with the recipe now
@@ -2216,6 +2231,8 @@ function pantryForm(id){
     if(exp && !isDate(exp)) return fail("pexp","Pick a valid date or leave it blank.");
     if(!ROOMS[rm]) return fail("proom","Pick where it lives.");
     const data = {name, qty:val(form,"pqty"), room:rm, expires:exp};
+    const same = p && normName(p.name) === normName(name) ? null : state.pantry.find(x => x !== p && normName(x.name) === normName(name));
+    if(same && warnDuplicate(form, "pname", same.id, `“${same.name}” is already in ${ROOMS[same.room]}${same.qty ? ` (${same.qty})` : ""}. Tap Save again to add a second entry.`, "openDupPantry", same.id)) return;
     if(p){ Object.assign(p, data); p.example = false; } else state.pantry.push(Object.assign({id:uid(), example:false}, data));
     prefs.pantryRoom = rm; savePrefs();
     save(); closeSheet(); render(); toast(p ? "Saved" : `Added to ${ROOMS[rm]}`);
@@ -2230,7 +2247,10 @@ const KITCHEN_ACTIONS = {
   newRecipe: () => recipeForm(null),
   editRecipe: id => recipeForm(id),
   openRecipe: id => recipeView(id),
-  loadExamples: () => { state.recipes.push(...exampleRecipes()); save(); render(); toast("Added 2 example recipes"); },
+  loadExamples: () => { const add = exampleRecipes().filter(x => !findDuplicateRecipe(x.title, "", null));
+    if(!add.length){ toast("The example recipes are already here"); return; }
+    state.recipes.push(...add); save(); render(); toast(`Added ${add.length} example recipe${add.length === 1 ? "" : "s"}`); },
+  openDupRecipe: id => { closeSheet(); recipeView(id); },
   loadPantryExamples: () => { state.pantry.push(...examplePantry()); save(); render(); toast("Added 3 example items"); },
   rsort: id => { recipeSort = SORTS[id] ? id : "az"; render(); },
   toggleFilters: () => { filtersOpen = !filtersOpen; render(); },
@@ -2284,12 +2304,20 @@ const KITCHEN_ACTIONS = {
   planDinner: () => mealForm(null, todayStr()),
   gcheck: id => { const g = state.grocery.find(x => x.id === id); if(!g) return; g.checked = !g.checked; save(); render(); },
   editGrocery: id => groceryForm(id),
-  putAway: () => { const done = state.grocery.filter(g => g.checked); let n = 0;
-    done.forEach(g => { if(g.aisle === "Household" || g.aisle === "Pet") return; state.pantry.push({id:uid(), name:g.name, qty:g.qty, room:guessRoom(g.aisle, g.name), expires:"", example:false}); n++; });
-    state.grocery = state.grocery.filter(g => !g.checked); save(); render(); toast(n ? `Put ${n} away in the pantry` : "Cleared"); },
+  putAway: () => { const done = state.grocery.filter(g => g.checked); let added = 0, merged = 0, other = 0;
+    const before = {grocery: JSON.parse(JSON.stringify(state.grocery)), pantry: JSON.parse(JSON.stringify(state.pantry))};
+    done.forEach(g => {
+      if(g.aisle === "Household" || g.aisle === "Pet"){ other++; return; }     // not food: checked off, not stored
+      const have = state.pantry.find(p => normName(p.name) === normName(g.name));
+      if(have){ have.qty = mergeQty(have.qty, g.qty); have.example = false; merged++; return; }
+      state.pantry.push({id:uid(), name:g.name, qty:g.qty, room:guessRoom(g.aisle, g.name), expires:"", example:false}); added++; });
+    state.grocery = state.grocery.filter(g => !g.checked); save(); render();
+    const msg = [added && `${added} put away`, merged && `${merged} added to what you had`, other && `${other} household or pet item${other === 1 ? "" : "s"} cleared`].filter(Boolean).join(" · ");
+    toast(msg || "Cleared", () => { state.grocery = before.grocery; state.pantry = before.pantry; save(); render(); }); },
   clearChecked: () => { const before = state.grocery.slice(); state.grocery = state.grocery.filter(g => !g.checked); save(); render(); toast("Cleared checked items", () => { state.grocery = before; save(); render(); }); },
   room: id => { if(ROOMS[id]){ prefs.pantryRoom = id; savePrefs(); render(); } },
   newPantry: () => pantryForm(null),
+  openDupPantry: id => { const x = state.pantry.find(q => q.id === id); if(!x) return; closeSheet(); prefs.pantryRoom = x.room; savePrefs(); render(); pantryForm(id); },
   editPantry: id => pantryForm(id),
   pantryToGrocery: id => { const p = state.pantry.find(x => x.id === id); if(!p) return;
     if(state.grocery.some(g => !g.checked && normName(g.name) === normName(p.name))){ closeSheet(); toast("Already on the grocery list"); return; }
@@ -3753,6 +3781,16 @@ function closeSheet(){ discardPendingPdf(); $("#sheetRoot").innerHTML = ""; if(l
 function field(id, label, input, hint){ return `<div class="field" id="f-${id}"><label for="${id}">${label}</label>${input}${hint?`<span class="hint">${hint}</span>`:""}</div>`; }
 function clearErrors(form){ form.querySelectorAll(".field.bad").forEach(f => { f.classList.remove("bad"); const e = f.querySelector(".err"); if(e) e.remove(); }); }
 function fail(id, msg){ const f = $("#f-"+id); if(!f) return; f.classList.add("bad"); f.insertAdjacentHTML("beforeend", `<span class="err" role="alert">${esc(msg)}</span>`); const i = f.querySelector("input,select,textarea"); if(i) i.focus(); }
+// Shows a duplicate warning under a field the first time; returns true to stop this save.
+// Tapping Save again with the same match keeps both. openAct/openId add a button to jump to the existing one.
+function warnDuplicate(form, fieldId, matchId, msg, openAct, openId){
+  if(form.dataset.dupOk === matchId) return false;
+  form.dataset.dupOk = matchId;
+  fail(fieldId, msg);
+  const f = $("#f-" + fieldId);
+  if(f && openAct) f.insertAdjacentHTML("beforeend", `<button type="button" class="link" data-act="${openAct}" data-id="${esc(openId)}" style="align-self:flex-start;padding-left:0">Open the one you have</button>`);
+  return true;
+}
 function val(form, name){ const el = form.elements[name]; return el ? String(el.value).trim() : ""; }
 function footer(delAct){
   return `<div class="actions">${delAct ? `<button type="button" class="btn danger small" data-act="askDelete" data-del="${delAct}">Delete</button>` : ""}
