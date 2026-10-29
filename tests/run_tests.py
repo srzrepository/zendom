@@ -744,7 +744,7 @@ async def test_appointments(browser):
 async def test_status(browser):
     pg = await new_page(browser, clock="2026-11-12T10:00:00-08:00")
     view = lambda: ev(pg, "document.querySelector('#view').innerText")
-    check("status: Today invites you to set one", "Tap to set a status" in await view())
+    check("status: Today invites you to set one", "Tap to pick a face" in await view())
     # top-right buttons are now Family shortcuts, not a user switch
     await pg.locator('#who [data-id="charlie"]').click(); await pg.wait_for_timeout(80)
     check("top-right Charlie opens Charlie's profile", await ev(pg, "prefs.tab + '/' + prefs.moreTab + '/' + prefs.fam") == "more/family/charlie")
@@ -761,24 +761,36 @@ async def test_status(browser):
     await act(pg, "setStatus")
     check("status: sheet opens", await sheet_open(pg))
     await submit(pg)
-    check("status: empty is refused with a message", await sheet_open(pg) and "Pick an emoji or type" in await ev(pg, "document.querySelector('#sheetForm').innerText"))
+    check("status: empty is refused with a message", await sheet_open(pg) and "Pick a face or type" in await ev(pg, "document.querySelector('#sheetForm').innerText"))
     await pg.locator('#sheetForm [data-act="statusPreset"]', has_text="Napping").click()
     await submit(pg)
     st = (await stored(pg))["people"]["sam"]["status"]
-    check("status: preset saves emoji and words", st["emoji"] == "😴" and st["text"] == "Napping" and st["at"] > 0, json.dumps(st))
-    check("status: shows on Today", "😴 Napping" in await view() and "just now" in await view())
-    check("status: emoji badge on the top-right avatar", await ev(pg, "document.querySelector('#who [data-id=sam] .st').textContent") == "😴")
+    check("status: preset saves a face and words", st["face"] == "sleepy" and st["text"] == "Napping" and st["at"] > 0, json.dumps(st))
+    dbg = await ev(pg, "[document.querySelector('.status-card .strow .bub') && document.querySelector('.status-card .strow .bub').textContent, document.querySelectorAll('.status-card .strow:first-child .face rect').length, (faceSVG('sam','sleepy').match(/<rect/g)||[]).length]")
+    check("status: shows on Today in a speech bubble with the face", dbg[0] == "Napping" and dbg[1] == dbg[2] and "just now" in await view(), json.dumps(dbg))
+    check("status: little speech bubble on the top-right avatar", await ev(pg, "!!document.querySelector('#who [data-id=sam] .st') && !document.querySelector('#who [data-id=charlie] .st')"))
     await ev(pg, "ACTIONS.goFam('sam')")
-    check("status: shows on the Family profile", "😴 Napping" in await view())
+    check("status: shows on the Family profile", "Napping" in await view() and "Sleepy" in await view())
     await ev(pg, "ACTIONS.goFam('charlie')")
     check("status: can't change someone else's", "Change status" not in await view() and "No status set" in await view())
+    # a face with no words is a status too; every face draws; tail wag animates
+    await ev(pg, "ACTIONS.tab('today')"); await act(pg, "setStatus")
+    ftxt = await ev(pg, "document.querySelector('#sheetForm').innerText")
+    check("faces: all 14 offered, with the renamed ones", await ev(pg, "document.querySelectorAll('#sheetForm input[name=sface]').length") == 14 and all(n in ftxt for n in ("Normal style", "Tail wag", "Doggy world")))
+    await pg.locator('#sheetForm label', has_text="Tail wag").click(); await fill(pg, {"stext": ""}); await submit(pg)
+    st = (await stored(pg))["people"]["sam"]["status"]
+    check("faces: a face alone saves", st["face"] == "wag" and st["text"] == "", json.dumps(st))
+    check("faces: tail wag has two animated tail frames", await ev(pg, "document.querySelectorAll('.status-card .face .wa rect').length > 0 && document.querySelectorAll('.status-card .face .wb rect').length > 0"))
+    sizes = await ev(pg, "FACE_KEYS.flatMap(k => ['sam','charlie'].map(w => (faceSVG(w,k).match(/<rect/g)||[]).length))")
+    check("faces: every face renders for both of you", all(n > 200 for n in sizes) and len(set(sizes)) > 10, json.dumps(sizes))
+    await ev(pg, "ACTIONS.tab('today')")
     # edit with typed text, over-long
     await ev(pg, "ACTIONS.tab('today')"); await act(pg, "setStatus")
     await fill(pg, {"stext": "x" * 120}); await submit(pg)
     check("status: long text kept to 80 characters", len((await stored(pg))["people"]["sam"]["status"]["text"]) <= 80)
     await act(pg, "setStatus"); await act(pg, "clearStatus")
     st = (await stored(pg))["people"]["sam"]["status"]
-    check("status: Clear status empties it", st["emoji"] == "" and st["text"] == "")
+    check("status: Clear status empties it", st["face"] == "normal" and st["text"] == "")
     # a status change never becomes a notification; a real profile edit still does
     r = await ev(pg, """(() => { const o = JSON.parse(JSON.stringify(state.people.sam)); const n = Object.assign({}, o, {status:{emoji:'🎧',text:'Focus',at:1}});
       const m = Object.assign({}, o, {name:'Sammy'}); return [describeChange('person~sam', o, n), describeChange('person~sam', o, m)]; })()""")
@@ -806,7 +818,7 @@ async def test_status(browser):
     # older data without statuses, and junk statuses, load fine
     pg = await new_page(browser, storage={"zendom:data": json.dumps({"version": 9, "people": {"sam": {"name": "Sam"}, "charlie": {"name": "Charlie", "status": {"emoji": 5, "text": {"x": 1}, "at": "nope"}}}})})
     d = {"people": await ev(pg, "state.people")}
-    check("status: old data gets an empty status", d["people"]["sam"]["status"] == {"emoji": "", "text": "", "at": 0} and "status" not in d["people"]["paprika"], json.dumps(d["people"]["sam"].get("status")))
+    check("status: old data gets an empty status", d["people"]["sam"]["status"] == {"face": "normal", "emoji": "", "text": "", "at": 0} and "status" not in d["people"]["paprika"], json.dumps(d["people"]["sam"].get("status")))
     check("status: junk is cleaned up", d["people"]["charlie"]["status"]["at"] == 0 and isinstance(d["people"]["charlie"]["status"]["text"], str))
     check("status: old data no page errors", not pg.errors, "; ".join(pg.errors))
     await pg.context.close()
