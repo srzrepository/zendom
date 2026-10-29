@@ -494,7 +494,7 @@ a.btn{text-decoration:none}
 const KEY = "zendom:data";
 const PREFS_KEY = "zendom:prefs";
 const BACKUP_PREFIX = "zendom:backup:";
-const SCHEMA = 6;
+const SCHEMA = 7;
 const PEOPLE = ["sam","charlie","paprika"];
 const BIRTHDAYS = {sam:"1994-08-19", charlie:"1992-02-22"};   // given by Sam; filled in only where blank
 const HUMANS = ["sam","charlie"];
@@ -855,6 +855,15 @@ function addMonths(s, n){
   const last = new Date(d.getFullYear(), d.getMonth()+1, 0).getDate();
   d.setDate(Math.min(day, last)); return toStr(d);
 }
+// Same date with the day of the month set to `day`, clamped to that month's length (31 -> 30, 28 or 29)
+function withDay(s, day){ if(!day) return s; const [y, m] = s.split("-").map(Number); const last = new Date(y, m, 0).getDate(); return `${y}-${pad(m)}-${pad(Math.min(day, last))}`; }
+// The k-th repeat after `first`. Monthly and yearly repeats are counted from `first` itself (not from the
+// previous, possibly shortened, date), so the 31st stays the 31st and Feb 29 comes back in leap years.
+function nthRepeat(first, kind, n, k, anchorDay){
+  if(kind === "monthly") return withDay(addMonths(first, k), anchorDay);
+  if(kind === "yearly") return withDay(addMonths(first, 12 * k), anchorDay);
+  return addDays(first, k * ({daily:1, weekly:7, biweekly:14}[kind] || n || 7));
+}
 function diffDays(a, b){ return Math.round((parse(b) - parse(a)) / 86400000); } // b - a
 function niceDate(s){
   if(!isDate(s)) return "";
@@ -980,7 +989,8 @@ const MIGRATIONS = {
   },
   3: d => Object.assign({}, d, {version: 4}),   // v4 adds the budget, recipe photos and the "made it" log; normalize fills the defaults
   4: d => Object.assign({}, d, {version: 5}),   // v5 adds calendar events; normalize adds an empty list
-  5: d => Object.assign({}, d, {version: 6})    // v6 adds the monthly plan and the Fun Fund; normalize fills defaults
+  5: d => Object.assign({}, d, {version: 6}),   // v6 adds the monthly plan and the Fun Fund; normalize fills defaults
+  6: d => Object.assign({}, d, {version: 7})    // v7 gives each bill a fixed day of the month (anchorDay); normalize takes it from the current due date
 };
 function migrate(d, from){
   let cur = d, v = from;
@@ -2332,7 +2342,7 @@ const curMonth = () => budgetMonth || (budgetMonth = todayStr().slice(0, 7));
 function addMonthKey(k, n){ const [y, m] = k.split("-").map(Number); const d = new Date(y, m - 1 + n, 1); return `${d.getFullYear()}-${pad(d.getMonth()+1)}`; }
 const monthName = k => { const [y, m] = k.split("-").map(Number); return new Date(y, m - 1, 1).toLocaleDateString(undefined, {month:"long", year:"numeric"}); };
 const catName = id => { const c = state.budget.categories.find(x => x.id === id); return c ? c.name : "Uncategorized"; };
-function nextBillDate(b){ return b.cycle === "weekly" ? addDays(b.nextDue, 7) : b.cycle === "yearly" ? addMonths(b.nextDue, 12) : addMonths(b.nextDue, 1); }
+function nextBillDate(b){ return nthRepeat(b.nextDue, b.cycle, 0, 1, b.anchorDay || +b.nextDue.slice(8)); }
 const billMonthly = b => b.cycle === "weekly" ? Math.round(b.amount * 52 / 12) : b.cycle === "yearly" ? Math.round(b.amount / 12) : b.amount;
 function billInfo(b){
   const n = diffDays(todayStr(), b.nextDue);
@@ -2522,6 +2532,7 @@ function billForm(id){
     if(!isDate(due)) return fail("bdue","Pick the next due date.");
     const cid = val(form,"bcat");
     const data = {name, amount, cycle, nextDue:due, categoryId: state.budget.categories.some(c => c.id === cid) ? cid : null, paidBy: HUMANS.includes(paidBy) ? paidBy : prefs.user, shared:form.elements.bshared.checked, autopay:form.elements.bauto.checked};
+    if(!b || b.nextDue !== due) data.anchorDay = +due.slice(8);   // a newly typed date sets the day it repeats on
     if(b) Object.assign(b, data); else state.budget.bills.push(Object.assign({id:uid()}, data));
     save(); closeSheet(); render(); toast("Bill saved");
   });
@@ -2563,6 +2574,7 @@ function normalizeBudget(raw){
       categoryId: t.kind === "expense" && catIds.has(t.categoryId) ? t.categoryId : null, shared: t.kind === "expense" && !!t.shared, note: str(t.note, 80), billId: t.billId ? String(t.billId) : null })),
     bills: objs(b.bills).filter(x => str(x.name).trim() && cents(x.amount) && isDate(x.nextDue)).map(x => Object.assign({}, x, {
       id: x.id ? String(x.id) : uid(), name: str(x.name, 40).trim(), amount: cents(x.amount), cycle: BILL_CYCLES[x.cycle] ? x.cycle : "monthly",
+      anchorDay: clampInt(x.anchorDay, 1, 31, +x.nextDue.slice(8)),
       categoryId: catIds.has(x.categoryId) ? x.categoryId : null, paidBy: HUMANS.includes(x.paidBy) ? x.paidBy : "sam", shared: !!x.shared, autopay: !!x.autopay }))
   });
 }
@@ -2858,22 +2870,21 @@ const EV_REPEAT = {none:"Doesn't repeat", weekly:"Every week", monthly:"Every mo
 let calWeek = null, calMonth = null, calDay = null;      // device-only view state
 const curCalWeek = () => calWeek || (calWeek = todayStr());
 const curCalMonth = () => calMonth || (calMonth = todayStr().slice(0, 7));
-function stepDate(d, kind, n){ return kind === "daily" ? addDays(d, 1) : kind === "weekly" ? addDays(d, 7) : kind === "biweekly" ? addDays(d, 14) : kind === "monthly" ? addMonths(d, 1) : kind === "yearly" ? addMonths(d, 12) : addDays(d, n || 7); }
 // Every calendar item between from and to (inclusive), as {date, type, title, who, act, id, time, flag}
 function calendarItems(from, to){
   const out = [], t = todayStr();
   const push = (date, o) => { if(date >= from && date <= to) out.push(Object.assign({date}, o)); };
-  const project = (first, kind, n, o) => { let d = first, guard = 0; while(d <= to && guard++ < 800){ push(d, o); d = stepDate(d, kind, n); } };
+  const project = (first, kind, n, o, anchorDay) => { let d = first; for(let k = 1; d <= to && k < 5000; k++){ push(d, o); d = nthRepeat(first, kind, n, k, anchorDay); } };
   // chores: overdue ones sit on today; repeats are projected forward from the next due date
   state.chores.forEach(c => {
     const o = {type:"chore", title:c.title, who:c.owner || "", act:"editChore", id:c.id};
     if(c.freq === "once"){ if(!c.done) push(c.start < t ? t : c.start, Object.assign({}, o, c.start < t ? {flag:"overdue"} : {})); return; }
     let due = nextDue(c);
-    if(due < t){ push(t, Object.assign({}, o, {flag:"overdue"})); due = stepDate(t, c.freq, c.everyDays); }
+    if(due < t){ push(t, Object.assign({}, o, {flag:"overdue"})); due = nthRepeat(t, c.freq, c.everyDays, 1); }
     project(due, c.freq, c.everyDays, o);
   });
   state.meals.forEach(m => push(m.date, {type:"meal", title:`${SLOTS[m.slot]}: ${mealLabel(m)}`, who:"", act:"editMeal", id:m.id, order:Object.keys(SLOTS).indexOf(m.slot)}));
-  state.budget.bills.forEach(b => project(b.nextDue, b.cycle, 0, {type:"bill", title:`${b.name} · ${money(b.amount)}`, who: b.shared ? "" : b.paidBy, act:"editBill", id:b.id}));
+  state.budget.bills.forEach(b => project(b.nextDue, b.cycle, 0, {type:"bill", title:`${b.name} · ${money(b.amount)}`, who: b.shared ? "" : b.paidBy, act:"editBill", id:b.id}, b.anchorDay));
   PEOPLE.forEach(k => {
     const p = state.people[k];
     p.checkups.forEach(c => { const i = checkupInfo(c); if(i.due) push(i.due < t ? t : i.due, {type:"health", title:`${p.name}: ${c.name}`, who: HUMANS.includes(k) ? k : "", act:"goFam", id:k, flag: i.due < t ? "overdue" : ""}); });
@@ -2891,7 +2902,7 @@ function calendarItems(from, to){
   state.events.forEach(e => {
     const o = {type:"event", title:e.title, who:e.who, act:"editEvent", id:e.id, time:e.time};
     if(e.repeat === "none") push(e.date, o);
-    else { let d = e.date, guard = 0; while(d < from && guard++ < 2000) d = stepDate(d, e.repeat); project(d, e.repeat, 0, o); }
+    else project(e.date, e.repeat, 0, o);
   });
   if(state.settings.holidays !== "off"){
     // New Year's on a Saturday is observed Dec 31 of the year before, so look one year ahead
