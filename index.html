@@ -1199,6 +1199,8 @@ const NOSAVE = "This browser isn't letting the app save. Changes will be lost wh
 
 let prefs = {tab:"today", user:"sam", fam:"sam", choreFilter:"me", preview:null, kitchenTab:"recipes", pantryRoom:"fridge", moreTab:"notes", todayView:"today", calWho:"all", budgetTab:"spending"};
 try { Object.assign(prefs, JSON.parse(lsGet(PREFS_KEY) || "{}")); } catch(e){}
+if(prefs.tab === "family"){ prefs.tab = "more"; prefs.moreTab = "family"; }
+if(prefs.tab === "more" && prefs.moreTab === "budget"){ prefs.tab = "budget"; prefs.moreTab = "notes"; }
 if(!HUMANS.includes(prefs.user)) prefs.user = "sam";
 if(!PEOPLE.includes(prefs.fam)) prefs.fam = "sam";
 if(prefs.preview !== null && !SEASONS[prefs.preview]) prefs.preview = null;
@@ -1305,11 +1307,12 @@ const IC = {
   tick:'<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 12.5l4 4L18 8"/></svg>',
   plus:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
   lock:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><rect x="5" y="11" width="14" height="9" rx="2.5"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
+  budget:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2.5" width="10" height="3.5" rx="1"/><path d="M7.5 6h9c1.4 1.3 2.5 3 2.5 5.5V18a3.5 3.5 0 0 1-3.5 3.5h-7A3.5 3.5 0 0 1 5 18v-6.5C5 9 6.1 7.3 7.5 6z"/><circle cx="12" cy="15" r="2.6"/></svg>',
   wallet:'<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="6" width="18" height="13" rx="3"/><path d="M16 12.5h2M3 9.5h18"/></svg>',
   cal:'<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3.5" y="5" width="17" height="15" rx="3"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg>',
   book:'<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3V4z"/><path d="M5 17a3 3 0 0 1 3-3h11"/></svg>'
 };
-const TABS = [["today","Today"],["chores","Chores"],["kitchen","Kitchen"],["family","Family"],["more","More"]];
+const TABS = [["today","Today"],["chores","Chores"],["kitchen","Kitchen"],["budget","Budget"],["more","More"]];
 const nameOf = k => state.people[k] ? state.people[k].name : "";
 const other = k => k === "sam" ? "charlie" : "sam";
 
@@ -1320,13 +1323,14 @@ function render(){
   $("#who").innerHTML = HUMANS.map(k => `<button type="button" data-act="setUser" data-id="${k}" aria-pressed="${prefs.user===k}"><span class="av">${sprite(k)}</span><span class="nm">${esc(nameOf(k))}</span></button>`).join("");
   $("#nav").innerHTML = TABS.map(([k,l]) => `<button type="button" data-act="tab" data-id="${k}" ${prefs.tab===k?'aria-current="page"':""}>${IC[k]}<span>${l}</span></button>`).join("");
   const v = $("#view");
-  v.innerHTML = ({today:viewToday, chores:viewChores, kitchen:viewKitchen, family:viewFamily, more:viewMore})[prefs.tab]();
+  v.innerHTML = ({today:viewToday, chores:viewChores, kitchen:viewKitchen, budget:viewBudgetArea, more:viewMore})[prefs.tab]();
   const fab = $("#fab");
   const kfab = {recipes:["newRecipe","New recipe"], plan:["planDinner","Plan a meal"], pantry:["newPantry","Add item"]}[prefs.kitchenTab];
   const fabs = {chores:["newChore","New chore"]};
   if(prefs.tab === "today" && (prefs.todayView === "week" || prefs.todayView === "month")) fabs.today = ["newEvent","Add event"];
   const bfab = {spending:["newTxn","Add spending"], fund:["fundIn","Add money"]}[BTABS[prefs.budgetTab] ? prefs.budgetTab : "spending"];
-  const mfab = {notes:["newNote","New note"], budget:bfab}[MTABS[prefs.moreTab] ? prefs.moreTab : "notes"];
+  if(bfab) fabs.budget = bfab;
+  const mfab = {notes:["newNote","New note"]}[MTABS[prefs.moreTab] ? prefs.moreTab : "notes"];
   if(mfab) fabs.more = mfab;
   if(kfab && !(prefs.kitchenTab === "recipes" && !state.recipes.length)) fabs.kitchen = kfab;
   if(fabs[prefs.tab]){ fab.hidden = false; fab.dataset.act = fabs[prefs.tab][0]; fab.innerHTML = IC.plus + esc(fabs[prefs.tab][1]); }
@@ -1401,7 +1405,7 @@ function viewTodayMain(){
   </section>
 
   <section class="sec">
-    <div class="sec-head"><span class="label">Health heads-up</span><button class="link" type="button" data-act="tab" data-id="family">Family</button></div>
+    <div class="sec-head"><span class="label">Health heads-up</span><button class="link" type="button" data-act="goFam" data-id="${esc(prefs.fam)}">Family</button></div>
     ${alerts.length ? `<div class="list">${alerts.slice(0,4).map(a => `
       <button type="button" class="item" data-act="goFam" data-id="${a.k}"><div><div class="t">${esc(a.what)}</div><div class="s">${esc(nameOf(a.k))}</div></div><span class="pill ${a.i.cls}">${esc(a.i.text)}</span></button>`).join("")}</div>`
     : `<div class="empty"><p>${anyHealthLogged() ? "No checkups or boosters due in the next 30 days." : "No checkups logged yet. Add dentist, eye and vet visits in Family and they'll show up here when due."}</p></div>`}
@@ -1474,7 +1478,7 @@ function viewFamily(){
       <button class="link" type="button" data-act="editBasics" style="padding-left:0">Edit details</button></div></div>
     <div class="facts">${facts.map(([a,b]) => `<div class="fact"><span class="label">${esc(a)}</span><b>${esc(b)}</b></div>`).join("")}</div>
   </section>
-  <p class="private">${IC.lock} Stored only on this device for now. Nothing is uploaded.</p>
+  <p class="private">${IC.lock} ${sync.status === "on" ? "Shared only between your two Google accounts, in your private zen·dom database." : "Stored only on this device. Nothing is uploaded unless you sign in to share between phones."}</p>
 
   <section class="sec">
     <div class="sec-head"><span class="label">Allergies</span><button class="link" type="button" data-act="addAllergy">+ Add</button></div>
@@ -1513,7 +1517,7 @@ function noteCard(n){
   const rx = rc.length || nr ? `<span class="rx">${rc.map(([e,c]) => `<span>${e}${c>1?" "+c:""}</span>`).join("")}${nr ? `<span>${nr} ${nr===1?"reply":"replies"}</span>` : ""}</span>` : "";
   return `<button type="button" class="note n-${n.color}" data-act="openNote" data-id="${n.id}" aria-label="Note from ${esc(nameOf(n.author))}: ${esc((n.text || (n.drawing ? "a drawing" : "")).slice(0,60))}">${n.drawing ? `<span class="paper">${drawingSvg(n.drawing, "Drawing by " + nameOf(n.author))}</span>` : ""}${n.text ? `<p>${esc(n.text)}</p>` : ""}${rx}<span class="by"><span>${esc(nameOf(n.author))}</span><span>${n.pinned ? "Pinned" : new Date(n.updated).toLocaleDateString(undefined,{month:"short",day:"numeric"})}</span></span></button>`;
 }
-const MTABS = {notes:"Notes", budget:"Budget", settings:"Settings"};
+const MTABS = {notes:"Notes", family:"Family", settings:"Settings"};
 const BTABS = {spending:"Spending", plan:"Plan", fund:"Fun Fund"};
 function viewBudgetArea(){
   const bt = BTABS[prefs.budgetTab] ? prefs.budgetTab : "spending";
@@ -1523,7 +1527,7 @@ function viewBudgetArea(){
 function viewMore(){
   const mt = MTABS[prefs.moreTab] ? prefs.moreTab : "notes";
   const sub = `<div class="subtabs three" role="tablist" aria-label="More sections">${Object.entries(MTABS).map(([k,l]) => `<button type="button" role="tab" class="sub" data-act="mtab" data-id="${k}" aria-selected="${mt===k}">${l}</button>`).join("")}</div>`;
-  return sub + (mt === "budget" ? viewBudgetArea() : mt === "settings" ? viewSettings() : viewNotes());
+  return sub + (mt === "family" ? viewFamily() : mt === "settings" ? viewSettings() : viewNotes());
 }
 function viewNotes(){
   const notes = state.notes.slice().sort((a,b) => (b.pinned - a.pinned) || (b.updated - a.updated));
@@ -1541,7 +1545,7 @@ function viewSettings(){
 
   <section class="sec"><span class="label">Backup</span>
     <div class="card" style="display:flex;flex-direction:column;gap:10px">
-      <p class="small" style="margin:0">Everything is saved in this browser only. Copy a backup now and then and keep it in Notes or email it to yourself.</p>
+      <p class="small" style="margin:0">${sync.status === "on" ? "Everything is also kept in your shared database. A backup copy is still a good idea now and then: keep it in Notes or email it to yourself." : "Everything is saved in this browser only. Copy a backup now and then and keep it in Notes or email it to yourself."}</p>
       <div class="actions"><button class="btn small" type="button" data-act="exportData">Copy backup</button><button class="btn ghost small" type="button" data-act="importData">Restore from backup</button></div>
       ${listBackups().length ? `<p class="small muted" style="margin:0">${listBackups().length} automatic safety ${listBackups().length===1?"copy":"copies"} saved before a data upgrade or repair. <button class="link" type="button" data-act="showBackups">View</button></p>` : ""}
       <p class="small muted" style="margin:0">Recipe photos and PDFs stay on this phone and aren't included in the backup text.</p>
@@ -4311,7 +4315,7 @@ const ACTIONS = {
   setUser: id => { prefs.user = id; savePrefs(); render(); },
   filter: id => { prefs.choreFilter = id; savePrefs(); render(); },
   fam: id => { prefs.fam = id; savePrefs(); render(); },
-  goFam: id => { prefs.fam = id; prefs.tab = "family"; savePrefs(); render(); window.scrollTo(0,0); },
+  goFam: id => { if(PEOPLE.includes(id)) prefs.fam = id; prefs.tab = "more"; prefs.moreTab = "family"; savePrefs(); render(); window.scrollTo(0,0); },
   toggle: id => toggleChore(id),
   newChore: () => choreForm(null),
   editChore: id => choreForm(id),
@@ -4534,7 +4538,7 @@ Object.assign(ACTIONS, KITCHEN_ACTIONS);
 Object.assign(DELETES, KITCHEN_DELETES);
 Object.assign(ACTIONS, BUDGET_ACTIONS, {
   mtab: id => { if(MTABS[id]){ prefs.moreTab = id; savePrefs(); render(); window.scrollTo(0,0); } },
-  goBudget: () => { prefs.tab = "more"; prefs.moreTab = "budget"; prefs.budgetTab = "spending"; budgetMonth = null; savePrefs(); render(); window.scrollTo(0,0); }
+  goBudget: () => { prefs.tab = "budget"; prefs.budgetTab = "spending"; budgetMonth = null; savePrefs(); render(); window.scrollTo(0,0); }
 });
 Object.assign(DELETES, BUDGET_DELETES, CAL_DELETES);
 Object.assign(ACTIONS, CAL_ACTIONS, {

@@ -67,6 +67,8 @@ async def main():
         await ev(A, "ACTIONS.syncIn()"); await settle(A)
         n = len(await ev(A, "Object.keys(recordsOf(state))"))
         check("first phone uploads its household", len(srv.recs) == n and n > 10, f"{len(srv.recs)} vs {n}")
+        check("Family's privacy line says it's shared once signed in", "Shared only between your two Google accounts" in await ev(A, "ACTIONS.goFam('sam'); document.querySelector('#view').innerText"))
+        await ev(A, "ACTIONS.tab('more'); ACTIONS.mtab('settings')")
         check("settings shows the signed-in account", "sam@example.com" in await ev(A, "document.querySelector('#view').innerText"))
 
         B = await phone(b, srv, "charliepurdomva@gmail.com")

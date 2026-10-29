@@ -71,7 +71,8 @@ async def confirm_delete(pg):
 
 
 async def test_tabs(pg):
-    for tab in ["today", "chores", "kitchen", "family", "more"]:
+    check("bottom bar is Today, Chores, Kitchen, Budget, More", await ev(pg, "[...document.querySelectorAll('#nav button')].map(b => b.dataset.id).join(',')") == "today,chores,kitchen,budget,more")
+    for tab in ["today", "chores", "kitchen", "budget", "more"]:
         await act(pg, "tab", tab)
         cur = await ev(pg, "document.querySelector('#nav [aria-current=page]').dataset.id")
         body = await ev(pg, "document.querySelector('#view').innerText.trim().length")
@@ -86,16 +87,18 @@ async def test_tabs(pg):
         await act(pg, "ktab", k)
         check(f"kitchen sub-tab {k} renders", await ev(pg, f"document.querySelector('[data-act=ktab][data-id={k}]').getAttribute('aria-selected')") == "true")
     await act(pg, "tab", "more")
-    for k in ["notes", "budget", "settings"]:
+    for k in ["notes", "family", "settings"]:
         await act(pg, "mtab", k)
         check(f"more sub-tab {k} renders", await ev(pg, f"document.querySelector('[data-act=mtab][data-id={k}]').getAttribute('aria-selected')") == "true")
-    await act(pg, "mtab", "budget")
+    await act(pg, "mtab", "notes")
+    await act(pg, "tab", "budget")
+    check("budget tab shows its add-spending button", await ev(pg, "document.querySelector('#fab').dataset.act") == "newTxn" and not await ev(pg, "document.querySelector('#fab').hidden"))
     for k in ["spending", "plan", "fund"]:
         await act(pg, "btab", k)
         check(f"budget sub-tab {k} renders", await ev(pg, f"document.querySelector('[data-act=btab][data-id={k}]').getAttribute('aria-pressed')") == "true")
     await act(pg, "btab", "spending")
-    await act(pg, "mtab", "notes")
-    await act(pg, "tab", "family")
+    await act(pg, "tab", "more"); await act(pg, "mtab", "family")
+    check("family has no stray add button", await ev(pg, "document.querySelector('#fab').hidden"))
     for k in ["sam", "charlie", "paprika"]:
         await act(pg, "fam", k)
         check(f"family profile {k} renders", await ev(pg, f"document.querySelector('[data-act=fam][data-id={k}]').getAttribute('aria-pressed')") == "true")
@@ -183,7 +186,7 @@ async def test_notes(pg):
 
 
 async def test_family(pg):
-    await act(pg, "tab", "family")
+    await act(pg, "tab", "more"); await act(pg, "mtab", "family")
     await act(pg, "fam", "sam")
     await act(pg, "addAllergy")
     await submit(pg)
@@ -374,8 +377,7 @@ async def test_calendar(pg):
 
 
 async def test_budget(pg):
-    await act(pg, "tab", "more")
-    await act(pg, "mtab", "budget")
+    await act(pg, "tab", "budget")
     await act(pg, "btab", "spending")
     await act(pg, "newTxn")
     await fill(pg, {"amt": "-5"})
@@ -413,7 +415,7 @@ async def run_all(browser):
     # empty data: everything deleted
     empty = {"zendom:data": json.dumps({"version": 6, "people": {}, "chores": [], "notes": [], "recipes": [], "meals": [], "grocery": [], "pantry": [], "events": []})}
     pg = await new_page(browser, storage=empty, clock="2026-10-29T10:00:00-07:00")
-    for tab in ["today", "chores", "kitchen", "family", "more"]:
+    for tab in ["today", "chores", "kitchen", "budget", "more"]:
         await act(pg, "tab", tab)
     await act(pg, "tab", "kitchen")
     for k in ["recipes", "plan", "grocery", "pantry"]:
@@ -424,6 +426,16 @@ async def run_all(browser):
     await act(pg, "tab", "chores")
     check("empty state: chores shows add-first button", await ev(pg, "!!document.querySelector('#view [data-act=newChore]')"))
     check("empty state: no page errors", not pg.errors, "; ".join(pg.errors)[:300])
+    await pg.context.close()
+
+    # a phone last left on the old Family tab, or on More → Budget
+    pg = await new_page(browser, storage={"zendom:prefs": json.dumps({"tab": "family", "fam": "paprika"})}, clock="2026-10-29T10:00:00-07:00")
+    check("old Family tab opens More → Family", await ev(pg, "prefs.tab + '/' + prefs.moreTab") == "more/family" and "Paprika" in await ev(pg, "document.querySelector('#view').innerText"))
+    await pg.context.close()
+    pg = await new_page(browser, storage={"zendom:prefs": json.dumps({"tab": "more", "moreTab": "budget"})}, clock="2026-10-29T10:00:00-07:00")
+    check("old More → Budget opens the Budget tab", await ev(pg, "prefs.tab") == "budget" and await ev(pg, "!!document.querySelector('[data-act=btab]')"))
+    check("Health heads-up's Family link goes to More → Family", await ev(pg, "ACTIONS.goFam('charlie'); prefs.tab + '/' + prefs.moreTab + '/' + prefs.fam") == "more/family/charlie")
+    check("Bills due's Budget link goes to the Budget tab", await ev(pg, "ACTIONS.goBudget(); prefs.tab") == "budget")
     await pg.context.close()
 
     # corrupt data is kept as a safety copy, not thrown away
@@ -475,7 +487,7 @@ async def test_dates(browser):
     check("migration v6->v7: bill kept and anchored to the 31st", s["version"] == await ev(pg, "SCHEMA") and b["name"] == "Rent" and b["amount"] == 250000 and b["anchorDay"] == 31 and b["categoryId"] == "k1")
     check("migration v6->v7: safety copy made", any(k.startswith("zendom:backup:before-v") for k in keys))
     # pay it through the UI twice
-    await act(pg, "tab", "more"); await act(pg, "mtab", "budget"); await act(pg, "btab", "spending")
+    await act(pg, "tab", "budget"); await act(pg, "btab", "spending")
     await act(pg, "payBill", "b1"); await act(pg, "payBill", "b1")
     s = await stored(pg)
     check("bill: paying twice via the button goes Oct 31 -> Nov 30 -> Dec 31", s["budget"]["bills"][0]["nextDue"] == "2026-12-31" and len(s["budget"]["txns"]) == 2, s["budget"]["bills"][0]["nextDue"])
