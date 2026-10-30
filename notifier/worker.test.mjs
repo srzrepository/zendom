@@ -1,6 +1,6 @@
 // Checks for the notifier with a stand-in for Google's servers. Run: node notifier/worker.test.mjs
 import { generateKeyPairSync, createVerify } from "node:crypto";
-import worker, { googleToken } from "./worker.js";
+import worker, { googleToken, recipeFromHtml, duration, clean } from "./worker.js";
 
 let pass = 0, fail = 0;
 const check = (name, ok, detail) => { if (ok) pass++; else fail++; console.log((ok ? "PASS " : "FAIL ") + name + (!ok && detail ? "  [" + detail + "]" : "")); };
@@ -21,6 +21,17 @@ function reset() {
   ];
 }
 let jwtSeen = null;
+const PAGES = {
+  // WordPress-style: Recipe inside @graph, sections, entities, ISO durations, yield as a list
+  tacos: `<html><head><title>Tacos | Blog</title><script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebPage","name":"x"},
+    {"@type":["Recipe"],"name":"Weeknight Fish Tacos &amp; Slaw","recipeYield":["4","4 servings"],"prepTime":"PT15M","cookTime":"PT1H5M",
+     "description":"Crispy &#8220;fish&#8221; tacos.","recipeIngredient":["1 lb cod","2 cups cabbage, <b>shredded</b>","&frac12; cup crema"],
+     "recipeInstructions":[{"@type":"HowToSection","name":"Slaw","itemListElement":[{"@type":"HowToStep","text":"Toss the cabbage."}]},
+       {"@type":"HowToSection","name":"Fish","itemListElement":[{"@type":"HowToStep","text":"Season the cod."},{"@type":"HowToStep","text":"Fry 4 minutes a side."}]}]}]}</script></head><body>...</body></html>`,
+  // plain: instructions as one string, only totalTime
+  soup: `<script type=application/ld+json>[{"@type":"Recipe","name":"Miso Soup","recipeYield":"Serves 2","totalTime":"PT20M","recipeIngredient":["4 cups dashi","3 tbsp miso"],"recipeInstructions":"Warm the dashi. Whisk in the miso. Do not boil."}]</script>`,
+  plain: `<html><head><meta property="og:title" content="My Grandma's Pie"></head><body>no structured data</body></html>`
+};
 globalThis.fetch = async (url, opt = {}) => {
   url = String(url); calls.push({ url, opt });
   const res = (status, body) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -37,6 +48,10 @@ globalThis.fetch = async (url, opt = {}) => {
     const m = JSON.parse(opt.body).message;
     if (m.token === "fcm-charlie-old") return res(404, { error: { status: "NOT_FOUND", details: [{ errorCode: "UNREGISTERED" }] } });
     return res(200, { name: "projects/zendom-4ed52/messages/1" });
+  }
+  if (url.startsWith("https://recipes.test/")) {
+    if (url.endsWith("/gone")) return new Response("nope", { status: 404 });
+    const page = PAGES[url.split("/").pop()]; return new Response(page, { status: 200, headers: { "Content-Type": "text/html" } });
   }
   if (opt.method === "DELETE") { devices = devices.filter(d => !url.endsWith("/" + d.id)); return res(200, {}); }
   return res(500, { error: "unexpected " + url });
@@ -96,5 +111,26 @@ check("a half-pasted secret is explained", /entire \.json/.test((await r.json())
 const realFetch = globalThis.fetch; globalThis.fetch = async () => { throw new Error("network down"); };
 r = await post({ idToken: "tok-sam", body: "hi" }); j = await r.json(); globalThis.fetch = realFetch;
 check("any other failure comes back as a readable message", r.status === 500 && /notifier problem: network down/.test(j.error) && r.headers.get("Access-Control-Allow-Origin") === env.APP_ORIGIN, JSON.stringify(j));
+
+// ---------- recipe links ----------
+const rpost = body => worker.fetch(new Request("https://x.workers.dev/recipe", { method: "POST", body: JSON.stringify(body) }), env);
+r = await rpost({ idToken: "tok-sam", url: "https://recipes.test/tacos" }); j = await r.json();
+check("recipe: reads a recipe inside @graph", r.status === 200 && j.found && j.title === "Weeknight Fish Tacos & Slaw", JSON.stringify(j));
+check("recipe: servings, prep and cook times", j.servings === 4 && j.prep === "15 min" && j.cook === "1 hr 5 min", JSON.stringify([j.servings, j.prep, j.cook]));
+check("recipe: ingredients cleaned of tags and entities", JSON.stringify(j.ingredients) === JSON.stringify(["1 lb cod", "2 cups cabbage, shredded", "½ cup crema"]), JSON.stringify(j.ingredients));
+check("recipe: steps keep their section headings", JSON.stringify(j.steps) === JSON.stringify(["SLAW:", "Toss the cabbage.", "FISH:", "Season the cod.", "Fry 4 minutes a side."]), JSON.stringify(j.steps));
+check("recipe: keeps the description and the link", j.notes === "Crispy “fish” tacos." && j.source === "https://recipes.test/tacos");
+r = await rpost({ idToken: "tok-charlie", url: "https://recipes.test/soup" }); j = await r.json();
+check("recipe: one-paragraph instructions split into steps", JSON.stringify(j.steps) === JSON.stringify(["Warm the dashi.", "Whisk in the miso.", "Do not boil."]) && j.servings === 2 && j.cook === "20 min", JSON.stringify(j));
+r = await rpost({ idToken: "tok-sam", url: "https://recipes.test/plain" }); j = await r.json();
+check("recipe: a page without recipe data says so, with the page title", r.status === 200 && j.found === false && j.title === "My Grandma's Pie", JSON.stringify(j));
+r = await rpost({ idToken: "tok-sam", url: "https://recipes.test/gone" });
+check("recipe: a missing page is reported", r.status === 502 && /404/.test((await r.json()).error));
+for (const [name, body, code] of [["not signed in", { url: "https://recipes.test/tacos" }, 401], ["someone else", { idToken: "tok-stranger", url: "https://recipes.test/tacos" }, 403],
+  ["not a link", { idToken: "tok-sam", url: "tacos please" }, 400], ["a local address", { idToken: "tok-sam", url: "http://127.0.0.1/admin" }, 400], ["a file", { idToken: "tok-sam", url: "file:///etc/passwd" }, 400]]) {
+  r = await rpost(body); check(`recipe: refuses ${name}`, r.status === code, r.status);
+}
+check("recipe: works without the notification secret", (await (await worker.fetch(new Request("https://x.workers.dev/recipe", { method: "POST", body: JSON.stringify({ idToken: "tok-sam", url: "https://recipes.test/soup" }) }), Object.assign({}, env, { GOOGLE_SA: undefined }))).json()).found === true);
+check("recipe: duration helper", duration("PT2H") === "2 hr" && duration("PT45M") === "45 min" && duration("P0DT1H30M") === "1 hr 30 min" && duration("") === "");
 console.log(`\n${pass} of ${pass + fail} notifier checks passed`);
 process.exit(fail ? 1 : 0);

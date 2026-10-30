@@ -956,6 +956,49 @@ async def test_qol(browser):
     await pg.context.close()
 
 
+async def test_links(browser):
+    pg = await new_page(browser)
+    seen = []
+    async def handle(route):
+        body = json.loads(route.request.post_data or "{}"); seen.append(body)
+        u = body.get("url", "")
+        if "nodata" in u: data = {"found": False, "title": "Grandma's Pie", "source": u}
+        elif "down" in u: return await route.fulfill(status=502, content_type="application/json", body=json.dumps({"error": "the site said 404"}))
+        else: data = {"found": True, "title": "Fish Tacos", "servings": 4, "prep": "15 min", "cook": "1 hr 5 min", "ingredients": ["1 lb cod", "2 cups cabbage"], "steps": ["Season the cod.", "Fry it."], "notes": "Crispy.", "source": u}
+        await route.fulfill(status=200, content_type="application/json", headers={"Access-Control-Allow-Origin": "*"}, body=json.dumps(data))
+    await pg.route("https://notify.test/recipe", handle)
+    # signed out: explains, keeps the link
+    await ev(pg, "ACTIONS.tab('kitchen'); ACTIONS.ktab('recipes'); ACTIONS.pasteRecipe()")
+    await pg.locator('#paste').fill("https://www.example.com/fish-tacos"); await pg.locator('[data-act=fillFromPaste]').click(); await pg.wait_for_timeout(100)
+    check("links: signed out, it explains and keeps the link", "needs you signed in" in await ev(pg, "document.querySelector('#pasteStatus').textContent") and await ev(pg, "document.querySelector('#source').value") == "https://www.example.com/fish-tacos")
+    await ev(pg, "closeSheet()")
+    # signed in
+    await ev(pg, "NOTIFY.url = 'https://notify.test'; window.zdBackend = Object.assign(window.zdBackend || {}, {idToken: async () => 'tok-sam'}); sync.user = {email:'samzenteno@gmail.com'}")
+    await ev(pg, "ACTIONS.pasteRecipe()")
+    await pg.locator('#paste').fill("https://www.example.com/fish-tacos"); await pg.locator('[data-act=fillFromPaste]').click(); await pg.wait_for_timeout(300)
+    vals = await ev(pg, "['rtitle','servings','prep','cook','ings','steps','rnotes','source'].map(id => document.querySelector('#' + id).value)")
+    check("links: fills the form from the link", vals == ["Fish Tacos", "4", "15 min", "1 hr 5 min", "1 lb cod\n2 cups cabbage", "Season the cod.\nFry it.", "Crispy.", "https://www.example.com/fish-tacos"], json.dumps(vals))
+    check("links: sends the sign-in token and the link", seen and seen[-1] == {"idToken": "tok-sam", "url": "https://www.example.com/fish-tacos"}, json.dumps(seen))
+    check("links: says what it found", "Got it from example.com: 2 ingredients and 2 steps" in await ev(pg, "document.querySelector('#pasteStatus').textContent"))
+    check("links: nothing saved until Save", not any(r["title"] == "Fish Tacos" for r in (await stored(pg))["recipes"]))
+    await submit(pg)
+    r = [x for x in (await stored(pg))["recipes"] if x["title"] == "Fish Tacos"]
+    check("links: Save keeps it, with the source link", len(r) == 1 and r[0]["source"] == "https://www.example.com/fish-tacos" and r[0]["ingredients"] == ["1 lb cod", "2 cups cabbage"])
+    # pasting a link straight into the box works too (no button)
+    await ev(pg, "ACTIONS.pasteRecipe()")
+    await pg.locator('#paste').focus()
+    await ev(pg, "(() => { const b = document.querySelector('#paste'); b.value = 'https://site.test/nodata'; b.dispatchEvent(new Event('paste')); })()"); await pg.wait_for_timeout(300)
+    check("links: a page without recipe data says so and keeps title + link", "doesn't share its recipe" in await ev(pg, "document.querySelector('#pasteStatus').textContent") and await ev(pg, "document.querySelector('#rtitle').value") == "Grandma's Pie" and await ev(pg, "document.querySelector('#source').value") == "https://site.test/nodata")
+    await ev(pg, "closeSheet(); ACTIONS.pasteRecipe()")
+    await pg.locator('#paste').fill("https://site.test/down"); await pg.locator('[data-act=fillFromPaste]').click(); await pg.wait_for_timeout(300)
+    check("links: a broken page is explained", "Couldn't read that link (the site said 404)" in await ev(pg, "document.querySelector('#pasteStatus').textContent"))
+    await ev(pg, "closeSheet(); ACTIONS.pasteRecipe()")
+    await pg.locator('#paste').fill("2 cups rice\n1 egg\n\nFry the rice. Add the egg."); await pg.locator('[data-act=fillFromPaste]').click(); await pg.wait_for_timeout(100)
+    check("links: pasted recipe text still sorts like before", len(seen) == 3 and "1 egg" in await ev(pg, "document.querySelector('#ings').value"))
+    check("links: no page errors", not pg.errors, "; ".join(pg.errors))
+    await pg.context.close()
+
+
 async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch()
@@ -968,6 +1011,7 @@ async def main():
         await test_status(browser)
         await test_smart(browser)
         await test_qol(browser)
+        await test_links(browser)
         await browser.close()
     failed = [r for r in results if not r[1]]
     print(f"\n{len(results) - len(failed)} of {len(results)} checks passed")

@@ -1,6 +1,8 @@
 // zen·dom notifier: a Cloudflare Worker (free plan). Paste this whole file into the Worker's code editor.
 //
 // POST /notify   body (text/plain JSON): {idToken, title, body, test?}
+// POST /recipe   body (text/plain JSON): {idToken, url} -> the recipe on that web page, read from the
+//                schema.org "Recipe" data most recipe sites include for search engines.
 //   1. Checks idToken with Google (Identity Toolkit accounts:lookup): must be a verified email on ALLOWED.
 //   2. Lists phones in Firestore homes/zendom/devices (each phone saves itself there when someone opts in).
 //   3. Sends to the OTHER person's phones that turned on "notes and nudges" (test: to the sender's own phones).
@@ -102,11 +104,89 @@ export default {
   }
 };
 
+/* ---------- recipe links ---------- */
+const ENT = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", ndash: "–", mdash: "—", frac12: "½", frac14: "¼", frac34: "¾", deg: "°", rsquo: "’", lsquo: "‘", rdquo: "”", ldquo: "“", hellip: "…" };
+export function clean(t) {
+  return String(t == null ? "" : t)
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(+d))
+    .replace(/&([a-z0-9]+);/gi, (m, n) => ENT[n.toLowerCase()] ?? m)
+    .replace(/\s+/g, " ").trim();
+}
+// "PT1H30M" -> "1 hr 30 min"
+export function duration(iso) {
+  const m = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:\d+S)?)?$/i.exec(String(iso || "").trim());
+  if (!m) return clean(iso).slice(0, 20);
+  const h = (+(m[1] || 0)) * 24 + (+(m[2] || 0)), min = +(m[3] || 0);
+  return [h ? h + " hr" : "", min ? min + " min" : ""].filter(Boolean).join(" ");
+}
+const isType = (o, t) => o && (o["@type"] === t || (Array.isArray(o["@type"]) && o["@type"].includes(t)));
+function findRecipe(node, depth = 0) {
+  if (!node || typeof node !== "object" || depth > 6) return null;
+  if (Array.isArray(node)) { for (const x of node) { const r = findRecipe(x, depth + 1); if (r) return r; } return null; }
+  if (isType(node, "Recipe")) return node;
+  for (const k of ["@graph", "mainEntity", "mainEntityOfPage", "itemListElement"]) { const r = findRecipe(node[k], depth + 1); if (r) return r; }
+  return null;
+}
+function stepsOf(ins, out = []) {
+  if (!ins) return out;
+  if (typeof ins === "string") { clean(ins).split(/(?<=\.)\s+(?=[A-Z])|\n/).forEach(x => x.trim() && out.push(x.trim())); return out; }
+  if (Array.isArray(ins)) { ins.forEach(x => stepsOf(x, out)); return out; }
+  if (isType(ins, "HowToSection")) { if (ins.name) out.push(clean(ins.name).toUpperCase() + ":"); return stepsOf(ins.itemListElement, out); }
+  const t = clean(ins.text || ins.name || ""); if (t) out.push(t); return out;
+}
+export function recipeFromHtml(html, url) {
+  const blocks = [...String(html).matchAll(/<script[^>]*type=["']?application\/ld\+json["']?[^>]*>([\s\S]*?)<\/script>/gi)].map(m => m[1]);
+  let r = null;
+  for (const b of blocks) { try { r = findRecipe(JSON.parse(b.trim())); } catch (e) { r = null; } if (r) break; }
+  if (!r) {
+    const og = /<meta[^>]+property=["']og:title["'][^>]+content=(["'])(.*?)\1/i.exec(html), tt = /<title[^>]*>([^<]+)/i.exec(html);
+    return { found: false, title: clean(og ? og[2] : tt ? tt[1] : "").slice(0, 100), source: url };
+  }
+  const y = r.recipeYield; const yieldTxt = clean(Array.isArray(y) ? y.find(v => /\d/.test(String(v))) || y[0] : y);
+  const serv = parseInt((/\d+/.exec(yieldTxt) || [""])[0], 10);
+  const ings = (Array.isArray(r.recipeIngredient) ? r.recipeIngredient : Array.isArray(r.ingredients) ? r.ingredients : []).map(clean).filter(Boolean);
+  const notes = clean(r.description).slice(0, 600);
+  return {
+    found: true, title: clean(r.name).slice(0, 100), servings: serv > 0 && serv < 100 ? serv : null,
+    prep: duration(r.prepTime), cook: duration(r.cookTime) || (!r.prepTime ? duration(r.totalTime) : ""),
+    ingredients: ings.slice(0, 80).map(x => x.slice(0, 200)), steps: stepsOf(r.recipeInstructions).slice(0, 80).map(x => x.slice(0, 1000)),
+    notes, source: url
+  };
+}
+function okUrl(u) {
+  let x; try { x = new URL(u); } catch (e) { return null; }
+  if (!/^https?:$/.test(x.protocol)) return null;
+  const h = x.hostname;
+  if (h === "localhost" || /^(127\.|10\.|192\.168\.|169\.254\.|0\.)/.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h) || h.endsWith(".local") || h.endsWith(".internal") || /^\[/.test(h)) return null;
+  return x.toString();
+}
+async function readRecipe(env, msg) {
+  const url = okUrl(String(msg.url || "").trim().slice(0, 1000));
+  if (!url) return json({ error: "that doesn't look like a web link" }, 400, env);
+  let res;
+  try {
+    res = await fetch(url, { redirect: "follow", headers: { "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", "Accept": "text/html,application/xhtml+xml" }, signal: AbortSignal.timeout(12000) });
+  } catch (e) { return json({ error: "couldn't reach that site" }, 502, env); }
+  if (!res.ok) return json({ error: `the site said ${res.status}` }, 502, env);
+  const html = (await res.text()).slice(0, 4000000);
+  return json(recipeFromHtml(html, res.url || url), 200, env);
+}
+
 async function handle(req, env) {
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: {
       "Access-Control-Allow-Origin": env.APP_ORIGIN || "*", "Access-Control-Allow-Methods": "POST", "Access-Control-Allow-Headers": "Content-Type", "Access-Control-Max-Age": "86400" } });
     const url = new URL(req.url);
-    if (req.method !== "POST" || url.pathname !== "/notify") return json({ error: "not found" }, 404, env);
+    if (req.method !== "POST" || (url.pathname !== "/notify" && url.pathname !== "/recipe")) return json({ error: "not found" }, 404, env);
+    if (url.pathname === "/recipe") {      // reading a recipe needs a sign-in check, but not the service account
+      let m; try { m = JSON.parse(await req.text()); } catch (e) { return json({ error: "bad request" }, 400, env); }
+      if (!m || typeof m.idToken !== "string" || m.idToken.length > 5000) return json({ error: "sign in first" }, 401, env);
+      const who = await whoIs(env, m.idToken);
+      if (!who) return json({ error: "sign in again" }, 401, env);
+      if (!String(env.ALLOWED || "").toLowerCase().split(",").map(x => x.trim()).includes(who)) return json({ error: "not one of us" }, 403, env);
+      return readRecipe(env, m);
+    }
     if (!env.GOOGLE_SA) return json({ error: "the GOOGLE_SA secret isn't set in Cloudflare yet" }, 500, env);
     try { const sa = JSON.parse(env.GOOGLE_SA); if (!sa.private_key || !sa.client_email) throw 0; }
     catch (e) { return json({ error: "GOOGLE_SA isn't the whole service account file; paste the entire .json contents" }, 500, env); }

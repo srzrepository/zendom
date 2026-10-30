@@ -1992,7 +1992,7 @@ function recipeListHTML(){
 }
 function viewRecipes(){
   if(!state.recipes.length) return `<div class="empty"><p>No recipes yet. Add one by hand or paste a recipe you copied from a website.</p>
-    <div class="actions" style="justify-content:center"><button class="btn" type="button" data-act="newRecipe">${IC.plus} Add a recipe</button><button class="btn ghost" type="button" data-act="pasteRecipe">Paste a recipe</button><label class="btn ghost" for="pdfInput" style="cursor:pointer">Add a PDF<input type="file" id="pdfInput" accept="application/pdf,.pdf" class="sr"></label><button class="btn ghost" type="button" data-act="loadExamples">Load 2 examples</button></div></div>`;
+    <div class="actions" style="justify-content:center"><button class="btn" type="button" data-act="newRecipe">${IC.plus} Add a recipe</button><button class="btn ghost" type="button" data-act="pasteRecipe">Paste a recipe or link</button><label class="btn ghost" for="pdfInput" style="cursor:pointer">Add a PDF<input type="file" id="pdfInput" accept="application/pdf,.pdf" class="sr"></label><button class="btn ghost" type="button" data-act="loadExamples">Load 2 examples</button></div></div>`;
   const used = new Set(state.recipes.flatMap(r => r.categories));
   const cats = allCategories().filter(c => used.has(c));
   [...rf.types].forEach(t => { if(!used.has(t)) rf.types.delete(t); });
@@ -2001,7 +2001,7 @@ function viewRecipes(){
   const active = [...[...rf.types].map(t => [`ftype`, t, t]), rf.time ? ["ftime", "0", `≤ ${rf.time} min`] : null, rf.ready ? ["fready", "0", rf.ready === 100 ? "Have everything" : `${rf.ready}%+ on hand`] : null, rf.fav ? ["ffav", "", "★ Favorites"] : null].filter(Boolean);
   return `<div class="rtools"><div class="field" style="flex:1;min-width:0"><label for="recipeSearch" class="sr">Search recipes</label><input id="recipeSearch" type="search" placeholder="Search by name or ingredient" value="${esc(recipeQuery)}" autocomplete="off"></div>
       </div>
-    <div class="addrow"><button type="button" class="btn ghost small" data-act="pasteRecipe">Paste a recipe</button>
+    <div class="addrow"><button type="button" class="btn ghost small" data-act="pasteRecipe">Paste a recipe or link</button>
       <label class="btn ghost small" for="pdfInput" style="cursor:pointer">Add a PDF<input type="file" id="pdfInput" accept="application/pdf,.pdf" class="sr"></label></div>
     <div class="sortrow"><label for="rsortSel" class="small muted">Sort</label>
       <select id="rsortSel" data-change="rsort">${Object.entries(SORTS).map(([k,l]) => `<option value="${k}" ${recipeSort===k?"selected":""}>${l}</option>`).join("")}</select>
@@ -2382,7 +2382,7 @@ function recipeForm(id, focusPaste, preset){
   const d = r || {title:"", servings:4, prep:"", cook:"", categories:[], ingredients:[], steps:[], notes:"", source:""};
   openSheet(r ? "Edit recipe" : "New recipe", `
     ${`<div class="pastebox">
-      ${field("paste", r ? "Paste the recipe again to re-sort it" : "Copied a recipe? Paste it here", `<textarea id="paste" class="code" rows="4" placeholder="Copy the recipe from a website, a note or a text, then paste it here. We'll sort the name, ingredients and steps into the form below."></textarea>`)}
+      ${field("paste", r ? "Paste the recipe again to re-sort it" : "Paste a recipe or a link to one", `<textarea id="paste" class="code" rows="4" placeholder="Copy the recipe from a website, a note or a text, then paste it here. We'll sort the name, ingredients and steps into the form below."></textarea>`)}
       ${preset ? `<p class="small" style="margin:0">Read from <b>${esc(preset.fileName)}</b>${preset.kept ? ". A copy of the PDF will be saved with this recipe." : "."}</p>` : ""}
       <div class="setrow"><span class="small muted" id="pasteStatus" role="status">${r ? "This replaces the fields below. Nothing is saved until you tap Save." : "Or skip this and type it in below."}</span><button type="button" class="btn ghost small" data-act="fillFromPaste">Sort it</button></div>
     </div>`}
@@ -2426,11 +2426,41 @@ function recipeForm(id, focusPaste, preset){
     pb.addEventListener("paste", () => setTimeout(() => { if(pb.value.trim()) fillFromPaste(true); }, 0));
   }
 }
+const LINK_RE = /^https?:\/\/[^\s]+\.[^\s]+$/i;
+// A pasted web link: ask the zen·dom worker to read the recipe off the page.
+async function readRecipeLink(url){
+  const status = $("#pasteStatus"), say = t => { if(status) status.textContent = t; };
+  let host = ""; try { host = new URL(url).hostname.replace(/^www\./, ""); } catch(e){}
+  const set = (id, v) => { const el = $("#" + id); if(el && v){ el.value = v; el.classList.add("filled"); } };
+  set("source", url.slice(0, 500));
+  if(!NOTIFY.url || !window.zdBackend || !sync.user){ say(`Reading links needs you signed in (More → Settings). For now, copy the recipe text from ${host || "the page"} and paste it here.`); return; }
+  say(`Reading the recipe from ${host}…`); readRecipeLink.busy = url;
+  let j = null, err = "";
+  try {
+    const idToken = await window.zdBackend.idToken();
+    const res = await fetch(NOTIFY.url.replace(/\/$/, "") + "/recipe", {method:"POST", headers:{"Content-Type":"text/plain"}, body: JSON.stringify({idToken, url})});
+    j = await res.json().catch(() => null);
+    if(!res.ok) err = (j && j.error) || "the site didn't answer";
+  } catch(e){ err = navigator.onLine === false ? "you're offline" : "couldn't reach the recipe reader"; }
+  if(readRecipeLink.busy !== url || !$("#paste")) return;            // the sheet closed or another link was pasted
+  readRecipeLink.busy = null;
+  if(err || !j){ say(`Couldn't read that link (${err}). Copy the recipe text from the page and paste it here instead.`); return; }
+  if(!j.found){ set("rtitle", (j.title || "").slice(0, 100)); say(`${host} doesn't share its recipe in a form the app can read. Copy the ingredients and steps from the page and paste them here; the link is saved below.`); return; }
+  set("rtitle", (j.title || "").slice(0, 100));
+  if(j.servings) set("servings", String(Math.min(99, j.servings)));
+  set("prep", (j.prep || "").slice(0, 20)); set("cook", (j.cook || "").slice(0, 20));
+  set("ings", (j.ingredients || []).join("\n")); set("steps", (j.steps || []).join("\n")); set("rnotes", (j.notes || "").slice(0, 2000));
+  const box = $("#paste"); if(box) box.value = "";
+  const ni = (j.ingredients || []).length, ns = (j.steps || []).length;
+  say(`Got it from ${host}: ${ni} ingredient${ni === 1 ? "" : "s"} and ${ns} step${ns === 1 ? "" : "s"}. Check them below, then Save.`);
+  const t = $("#rtitle"); if(t) t.scrollIntoView({block:"start", behavior:"smooth"});
+}
 function fillFromPaste(auto){
   const box = $("#paste"); if(!box) return;
   const txt = box.value.trim();
   const status = $("#pasteStatus");
-  if(!txt){ fail("paste", "Paste some recipe text first."); return; }
+  if(!txt){ fail("paste", "Paste some recipe text or a link first."); return; }
+  if(LINK_RE.test(txt)){ readRecipeLink(txt); return; }
   const p = parseRecipeText(txt);
   const set = (id, v) => { const el = $("#" + id); if(el && v){ el.value = v; el.classList.add("filled"); } };
   set("rtitle", p.title.slice(0, 100));
