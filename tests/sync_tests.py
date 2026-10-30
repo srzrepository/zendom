@@ -317,6 +317,13 @@ async def main():
         await ev(K, "state.people.paprika.vet = 'Bay Vet'; save()"); await K.wait_for_timeout(700)
         await K.locator("#nudgeRoot [data-act=nudgeClose]").click(); await K.wait_for_timeout(200)
         check("notify: dismissing the pop-up sends nothing", len(srvN.notified) == 1 and not await ev(K, "document.querySelector('#nudgeRoot').innerHTML"))
+        # an old change that only goes out later (reconnecting, a resend) doesn't pop up "Tell Sam?"
+        await ev(K, "nudgeDismiss(); lastEditAt = Date.now() - 120000; showNudge.calls = 0")
+        await ev(K, "notifyCollect([{id:'chore~zz', data:{del:false, j:JSON.stringify({id:'zz', title:'Old', owner:'charlie', freq:'weekly', lastDone:todayStr(), done:false})}}], {'chore~zz': {id:'zz', title:'Old', owner:'charlie', freq:'weekly', lastDone:todayStr(), done:false}})")
+        check("notify: no pop-up for a change made minutes ago", not await ev(K, "document.querySelector('#nudgeRoot').innerHTML"))
+        await ev(K, "showNudge(['added a chore']); Object.defineProperty(document, 'hidden', {configurable:true, get: () => true}); document.dispatchEvent(new Event('visibilitychange'))")
+        check("notify: leaving the app closes the pop-up", not await ev(K, "document.querySelector('#nudgeRoot').innerHTML"))
+        await ev(K, "delete document.hidden; 0")
         check("notify: health changes are described vaguely", await ev(K, "describeChange('person~paprika', {name:'Paprika', meds:[]}, {name:'Paprika', meds:[{name:'Gabapentin'}]})") == "updated Paprika's profile")
         check("notify: spending is described without amounts", await ev(K, "describeChange('txn~t1', null, {kind:'expense', amount:4500, note:'Vet'})") == "logged spending")
         # off again, denied, sign-out

@@ -1290,7 +1290,9 @@ function load(){
   if(v > SCHEMA) notices.push("This data was saved by a newer version of zen·dom. It's shown as best this version can; new fields are kept.");
   state = normalize(parsed);
 }
+let lastEditAt = 0;                                  // when this phone last saved a change made here
 function save(){
+  lastEditAt = Date.now();
   if(!lsSet(KEY, JSON.stringify(state))){
     if(!notices.includes(NOSAVE)){ notices.push(NOSAVE); renderBanners(); }
     if(typeof syncSchedule === "function") syncSchedule();
@@ -4983,7 +4985,7 @@ function toast(msg, undo, label, ms){
   toastTimer = setTimeout(() => { $("#toastRoot").innerHTML = ""; toast.undo = null; }, ms || (undo ? 5000 : 2200));
 }
 /* ---- which version is this, and is there a newer one? ---- */
-const BUILD = "2026-10-30 · 27";
+const BUILD = "2026-10-30 · 28";
 let updateSeen = "";
 async function checkForUpdate(){
   if(!/^https?:$/.test(location.protocol) || navigator.onLine === false) return;
@@ -4995,11 +4997,12 @@ async function checkForUpdate(){
   } catch(e){}
 }
 window.addEventListener("load", () => setTimeout(checkForUpdate, 2500));
+document.addEventListener("visibilitychange", () => { if(document.hidden && typeof nudgeDismiss === "function" && $("#nudgeRoot").innerHTML) nudgeDismiss(); });
 document.addEventListener("visibilitychange", () => { if(!document.hidden) checkForUpdate(); });
 
 /* ---------- actions (event delegation) ---------- */
 const ACTIONS = {
-  tab: id => { prefs.tab = id; savePrefs(); render(); window.scrollTo(0,0); },
+  tab: id => { prefs.tab = id; if(id === "today") prefs.todayView = "today"; savePrefs(); render(); window.scrollTo(0,0); },
   // "tab/subtab", e.g. more/notes: open a tab on a particular sub-tab
   goTo: id => { const [t, sub] = String(id).split("/"); if(!TABS.some(x => x[0] === t)) return; prefs.tab = t;
     if(t === "more" && MTABS[sub]) prefs.moreTab = sub; if(t === "budget" && BTABS[sub]) prefs.budgetTab = sub; if(t === "kitchen" && KTABS[sub]) prefs.kitchenTab = sub;
@@ -5407,7 +5410,7 @@ function notifyCollect(writes, cur){
     if(w.data.del) delete sync.shadow[w.id]; else sync.shadow[w.id] = w.data.j;
   });
   if(notifyQ.items.length){ clearTimeout(notifyQ.timer); notifyQ.timer = setTimeout(() => notifySend(false), 1500); }
-  if(nudges.length) showNudge(nudges);
+  if(nudges.length && !document.hidden && Date.now() - lastEditAt < 30000) showNudge(nudges);   // only right after you changed something
 }
 let nudgeTimer;
 function showNudge(items){

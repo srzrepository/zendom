@@ -1132,6 +1132,10 @@ async def test_dinner_suggestions(browser):
     await ev(pg, "state.recipes.forEach(r => r.categories = ['Dessert']); save(); ACTIONS.tab('today')")
     check("dinner ideas: with no Lunch/Dinner recipes it says how to get ideas", "Tag recipes as Lunch or Dinner" in await ev(pg, "document.querySelector('#view').innerText"))
     check("viewport covers the notch area so the status bar strip is painted", "viewport-fit=cover" in await ev(pg, "document.querySelector('meta[name=viewport]').content"))
+    await ev(pg, "ACTIONS.tview('month'); ACTIONS.tab('kitchen')"); await pg.locator('nav.nav [data-id=today]').click(); await pg.wait_for_timeout(60)
+    check("Today button: opens the plain Today view, not the calendar", await ev(pg, "prefs.todayView") == "today" and "Tonight's dinner" in await ev(pg, "document.querySelector('#view').innerText"))
+    await ev(pg, "ACTIONS.tview('week')"); await pg.locator('nav.nav [data-id=today]').click(); await pg.wait_for_timeout(60)
+    check("Today button: tapping it again from Week goes back to Today", await ev(pg, "prefs.todayView") == "today")
     check("dinner ideas: no page errors", not pg.errors, "; ".join(pg.errors))
     await pg.context.close()
 
