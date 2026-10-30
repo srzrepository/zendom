@@ -210,6 +210,16 @@ async def main():
         await settle(S, K)
         await ev(S, "const n = state.notes.find(x => x.id === 'n-k'); n.replies.push({id:'r1', by:'sam', text:'YES', at:3}); save()"); await S.wait_for_timeout(2400)
         check("notify: a reply goes out too", srvN.notified[-1]["body"] == "Sam replied to a note: “YES”", srvN.notified[-1]["body"])
+        # meal comments: sync to the other phone and go out right away (no pop-up)
+        await settle(S, K)
+        await ev(K, "state.meals.push({id:'m-c', date:'2026-10-29', slot:'dinner', recipeId:null, text:'Tacos', comments:[]}); save()"); await settle(S, K, ms=2600)
+        await ev(K, "nudgeDismiss()")
+        n0 = len(srvN.notified)
+        await ev(S, "ACTIONS.editMeal('m-c'); document.querySelector('#mcomment').value = 'I can cook'; document.querySelector('#sheetForm').requestSubmit()"); await S.wait_for_timeout(2400)
+        check("meal comments: go out right away", len(srvN.notified) == n0 + 1 and srvN.notified[-1]["body"] == "Sam commented on Thursday's dinner: “I can cook”", srvN.notified[-1]["body"] if srvN.notified else "")
+        check("meal comments: no pop-up", not await ev(S, "document.querySelector('#nudgeRoot').innerHTML"))
+        await settle(S, K)
+        check("meal comments: show on the other phone", await ev(K, "(state.meals.find(x => x.id === 'm-c').comments || []).map(c => c.text).join()") == "I can cook")
         # other changes ask first
         srvN.notified.clear()
         cid = (await ev(K, "state.chores.map(c => c.id)"))[0]

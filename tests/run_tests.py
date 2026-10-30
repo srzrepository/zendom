@@ -766,7 +766,7 @@ async def test_status(browser):
     await submit(pg)
     st = (await stored(pg))["people"]["sam"]["status"]
     check("status: preset saves a face and words", st["face"] == "sleepy" and st["text"] == "Napping" and st["at"] > 0, json.dumps(st))
-    dbg = await ev(pg, "[document.querySelector('.status-card .strow .bub') && document.querySelector('.status-card .strow .bub').textContent, document.querySelectorAll('.status-card .strow:first-child .face rect').length, (faceSVG('sam','sleepy').match(/<rect/g)||[]).length]")
+    dbg = await ev(pg, "[document.querySelector('.status-card .strow .sbub') && document.querySelector('.status-card .strow .sbub').textContent, document.querySelectorAll('.status-card .strow:first-child .face rect').length, (faceSVG('sam','sleepy').match(/<rect/g)||[]).length]")
     check("status: shows on Today in a speech bubble with the face", dbg[0] == "Napping" and dbg[1] == dbg[2] and "just now" in await view(), json.dumps(dbg))
     check("status: little speech bubble on the top-right avatar", await ev(pg, "!!document.querySelector('#who [data-id=sam] .st') && !document.querySelector('#who [data-id=charlie] .st')"))
     await ev(pg, "ACTIONS.goFam('sam')")
@@ -869,6 +869,93 @@ async def test_smart(browser):
     await pg.context.close()
 
 
+async def test_qol(browser):
+    pg = await new_page(browser, clock="2026-10-29T22:00:00-07:00")
+    view = lambda: ev(pg, "document.querySelector('#view').innerText")
+    # Add event uses the selected day (month) / the visible week (week)
+    await ev(pg, "ACTIONS.tab('today'); ACTIONS.tview('month'); ACTIONS.calPick('2026-10-30')")
+    await pg.locator('#fab').click(); await pg.wait_for_timeout(60)
+    check("calendar: Add event on Month uses the selected day", await ev(pg, "document.querySelector('#edate').value") == "2026-10-30")
+    await ev(pg, "closeSheet()")
+    await ev(pg, "ACTIONS.calPick('2026-11-01')")
+    check("calendar: tapping Nov 1 from October opens November", await ev(pg, "curCalMonth()") == "2026-11" and "November" in await view() and await ev(pg, "calDay") == "2026-11-01")
+    await pg.locator('#fab').click(); await pg.wait_for_timeout(60)
+    check("calendar: and Add event starts on Nov 1", await ev(pg, "document.querySelector('#edate').value") == "2026-11-01")
+    await ev(pg, "closeSheet(); ACTIONS.calMonthNav('-1')")
+    check("calendar: month arrows still work after that", await ev(pg, "curCalMonth()") == "2026-10")
+    await ev(pg, "ACTIONS.tview('week'); ACTIONS.calWeekNav('1')")
+    await pg.locator('#fab').click(); await pg.wait_for_timeout(60)
+    check("calendar: Add event on next week starts on that week", await ev(pg, "document.querySelector('#edate').value") == await ev(pg, "curCalWeek()") and await ev(pg, "curCalWeek()") > "2026-10-29")
+    await ev(pg, "closeSheet(); ACTIONS.calWeekNav('0')")
+    await pg.locator('#fab').click(); await pg.wait_for_timeout(60)
+    check("calendar: this week starts on today", await ev(pg, "document.querySelector('#edate').value") == "2026-10-29")
+    await ev(pg, "closeSheet()")
+    # Board link lands on the board
+    await ev(pg, "ACTIONS.tab('more'); ACTIONS.mtab('settings'); ACTIONS.tab('today'); ACTIONS.tview('today')")
+    await pg.locator('[data-act=goTo][data-id="more/notes"]').click(); await pg.wait_for_timeout(60)
+    check("Board link opens More on the board", await ev(pg, "prefs.tab + '/' + prefs.moreTab") == "more/notes")
+    # Notify pop-up goes away when you go somewhere else, or open a form
+    await ev(pg, "ACTIONS.tab('today'); showNudge(['finished “Dishes”'])")
+    check("nudge: shows", await ev(pg, "!!document.querySelector('.nudge')"))
+    await pg.locator('nav.nav [data-id=chores]').click(); await pg.wait_for_timeout(60)
+    check("nudge: gone after switching pages", not await ev(pg, "!!document.querySelector('.nudge')") and await ev(pg, "notifyQ.nudge") is None)
+    await ev(pg, "showNudge(['added a chore'])"); await ev(pg, "ACTIONS.newChore()")
+    check("nudge: gone when a form opens", not await ev(pg, "!!document.querySelector('.nudge')"))
+    await ev(pg, "closeSheet(); showNudge(['added a chore']); render()")
+    check("nudge: stays if you're still on the same page", await ev(pg, "!!document.querySelector('.nudge')"))
+    await ev(pg, "nudgeDismiss()")
+    # Plan a meal on next week starts there
+    await ev(pg, "ACTIONS.tab('kitchen'); ACTIONS.ktab('plan'); ACTIONS.week('1')")
+    await pg.locator('#fab').click(); await pg.wait_for_timeout(60)
+    check("meal plan: Plan a meal on next week starts on that week", await ev(pg, "document.querySelector('#mdate').value") == await ev(pg, "curWeek()"))
+    await ev(pg, "closeSheet(); ACTIONS.week('0')")
+    # chore hidden by the filter: filter follows it
+    await ev(pg, "ACTIONS.tab('chores'); ACTIONS.filter('me'); ACTIONS.newChore()")
+    await fill(pg, {"title": "Vacuum the stairs"}); await pg.locator('#sheetForm input[name=owner][value=charlie]').check(); await submit(pg)
+    check("chores: a new card for Charlie shows instead of vanishing", await ev(pg, "prefs.choreFilter") == "them" and "Vacuum the stairs" in await view())
+    # pantry item added to another room: go there
+    await ev(pg, "ACTIONS.tab('kitchen'); ACTIONS.ktab('pantry'); ACTIONS.room('fridge'); ACTIONS.newPantry()")
+    await fill(pg, {"pname": "Mochi ice cream", "proom": "freezer"}); await submit(pg)
+    check("pantry: adding to the freezer from the fridge shows the freezer", await ev(pg, "prefs.pantryRoom") == "freezer" and "Mochi ice cream" in await view())
+    # meal comments
+    await ev(pg, "ACTIONS.ktab('plan')"); await pg.locator('#fab').click(); await pg.wait_for_timeout(60)
+    await fill(pg, {"mtext": "Tacos", "mcomment": "I'll cook!"}); await submit(pg)
+    d = await stored(pg); m = [x for x in d["meals"] if x["text"] == "Tacos"]
+    check("meal comments: a comment can go with a new meal", len(m) == 1 and m[0]["comments"][0]["text"] == "I'll cook!" and m[0]["comments"][0]["by"] == "sam", json.dumps(m))
+    check("meal comments: count shows on the plan", "1 comment" in await view())
+    await ev(pg, "ACTIONS.tab('today'); ACTIONS.tview('today')")
+    check("meal comments: latest shows on Today's dinner card", "Sam: I'll cook!" in await view())
+    await ev(pg, "prefs.user = 'charlie'; render()")
+    await pg.locator('.soon-card [data-act=editMeal]').click(); await pg.wait_for_timeout(60)
+    check("meal comments: the thread shows in the meal", "I'll cook!" in await ev(pg, "document.querySelector('#sheetForm').innerText") and not await ev(pg, "!!document.querySelector('#sheetForm [data-act=delMealComment]')"))
+    await fill(pg, {"mcomment": "yay, I'll do dishes"}); await submit(pg)
+    m = [x for x in (await stored(pg))["meals"] if x["text"] == "Tacos"][0]
+    check("meal comments: reply saved in order", [c["by"] for c in m["comments"]] == ["sam", "charlie"])
+    r = await ev(pg, "(() => { const n = state.meals.find(x => x.text === 'Tacos'); const o = Object.assign({}, n, {comments: n.comments.slice(0, 1)}); return describeChange('meal~' + n.id, o, n); })()")
+    check("meal comments: described for a notification", r.startswith("commented on Thursday's dinner") and "dishes" in r, r)
+    await ev(pg, "prefs.user = 'sam'; render()")
+    await ev(pg, "ACTIONS.editMeal(state.meals.find(x => x.text === 'Tacos').id)")
+    await pg.locator('#sheetForm [data-act=delMealComment]').click(); await pg.wait_for_timeout(60)
+    m = [x for x in (await stored(pg))["meals"] if x["text"] == "Tacos"][0]
+    check("meal comments: you can delete your own", [c["by"] for c in m["comments"]] == ["charlie"])
+    await act(pg, "undo")
+    m = [x for x in (await stored(pg))["meals"] if x["text"] == "Tacos"][0]
+    check("meal comments: and undo it", [c["by"] for c in m["comments"]] == ["sam", "charlie"])
+    await ev(pg, "closeSheet()")
+    # note replies keep their own look (status bubble class no longer leaks)
+    await ev(pg, "state.notes[0].replies.push({id:'r1',by:'charlie',text:'ok',at:Date.now()}); save(); noteDetail(state.notes[0].id)")
+    bw = await ev(pg, "getComputedStyle(document.querySelector('.reply .bub')).borderTopWidth")
+    check("note replies: no status-bubble border", bw in ("0px", ""), bw)
+    check("qol: no page errors", not pg.errors, "; ".join(pg.errors))
+    await pg.context.close()
+    # older meals without comments load fine
+    pg = await new_page(browser, storage={"zendom:data": json.dumps({"version": 9, "meals": [{"id": "m1", "date": "2026-10-29", "slot": "dinner", "text": "Soup"}]})}, clock="2026-10-29T18:00:00-07:00")
+    check("meal comments: old meals get an empty list", await ev(pg, "JSON.stringify(state.meals[0].comments)") == "[]" and "Soup" in await ev(pg, "document.querySelector('#view').innerText"))
+    await ev(pg, "ACTIONS.tab('kitchen'); ACTIONS.ktab('plan')")
+    check("meal comments: old meals no page errors", not pg.errors, "; ".join(pg.errors))
+    await pg.context.close()
+
+
 async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch()
@@ -880,6 +967,7 @@ async def main():
         await test_appointments(browser)
         await test_status(browser)
         await test_smart(browser)
+        await test_qol(browser)
         await browser.close()
     failed = [r for r in results if not r[1]]
     print(f"\n{len(results) - len(failed)} of {len(results)} checks passed")

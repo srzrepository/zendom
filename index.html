@@ -252,9 +252,9 @@ body.typing .nav,body.typing .fab{display:none}
 .face .wa{animation:wagA .5s steps(1) infinite}.face .wb{animation:wagB .5s steps(1) infinite}
 @keyframes wagA{0%{opacity:1}50%{opacity:0}}@keyframes wagB{0%{opacity:0}50%{opacity:1}}
 @media (prefers-reduced-motion:reduce){.face .wa{animation:none}.face .wb{animation:none;opacity:0}}
-.bub{position:relative;display:inline-block;max-width:100%;margin-top:4px;background:#fffaf0;color:#3b1f0e;border:2px solid #3b1f0e;border-radius:4px;padding:6px 10px;font-size:.95rem;box-shadow:3px 3px 0 rgba(59,31,14,.25);overflow-wrap:anywhere}
-.bub::before{content:"";position:absolute;left:-9px;top:9px;border:7px solid transparent;border-right:9px solid #3b1f0e;border-left:0}
-.bub::after{content:"";position:absolute;left:-5px;top:11px;border:5px solid transparent;border-right:6px solid #fffaf0;border-left:0}
+.sbub{position:relative;display:inline-block;max-width:100%;margin-top:4px;background:#fffaf0;color:#3b1f0e;border:2px solid #3b1f0e;border-radius:4px;padding:6px 10px;font-size:.95rem;box-shadow:3px 3px 0 rgba(59,31,14,.25);overflow-wrap:anywhere}
+.sbub::before{content:"";position:absolute;left:-9px;top:9px;border:7px solid transparent;border-right:9px solid #3b1f0e;border-left:0}
+.sbub::after{content:"";position:absolute;left:-5px;top:11px;border:5px solid transparent;border-right:6px solid #fffaf0;border-left:0}
 details.cpe{background:var(--surface-2);border-radius:16px;padding:10px 12px}
 details.cpe summary{font-weight:700;cursor:pointer}
 details.cpe .field{margin-top:10px}
@@ -292,7 +292,9 @@ input[type=search]{border:1.5px solid var(--line);background:var(--surface);bord
 .dh{display:flex;justify-content:space-between;align-items:center;gap:8px}
 .meal{border:0;background:var(--surface-2);border-radius:12px;padding:8px 10px;text-align:left;display:flex;gap:10px;align-items:baseline;width:100%}
 .meal .slot{font-family:var(--f-pixel);font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;flex:none;width:76px}
-.meal .mt{font-weight:600;overflow-wrap:anywhere;min-width:0}
+.meal .mt{font-weight:600;overflow-wrap:anywhere;min-width:0;flex:1}
+.meal .mc{flex:none;font-size:.78rem;color:var(--muted);font-weight:600;white-space:nowrap}
+.mlast{margin:4px 0 0;font-size:.9rem;color:var(--muted)}
 .gadd{display:flex;gap:8px}
 .gadd input{flex:1;min-width:0;border:1.5px solid var(--line);background:var(--surface);border-radius:14px;padding:11px 12px;min-height:46px}
 .gadd .btn{width:52px;padding:0}
@@ -1186,7 +1188,9 @@ function normalize(raw){
     photos: (Array.isArray(r.photos) ? r.photos : []).filter(p => typeof p === "string" && /^ph[a-z0-9]+$/i.test(p)).slice(0, 30),
     pdf: typeof r.pdf === "string" && /^pdf[a-z0-9]+$/i.test(r.pdf) ? r.pdf : "", pdfName: str(r.pdfName, 100) }));
   out.meals = objList(d.meals).filter(m => isDate(m.date) && (m.recipeId || str(m.text).trim())).map(m => Object.assign({}, m, {
-    id: m.id ? String(m.id) : uid(), slot: SLOTS[m.slot] ? m.slot : "dinner", recipeId: m.recipeId ? String(m.recipeId) : null, text: str(m.text, 80) }));
+    id: m.id ? String(m.id) : uid(), slot: SLOTS[m.slot] ? m.slot : "dinner", recipeId: m.recipeId ? String(m.recipeId) : null, text: str(m.text, 80),
+    comments: (Array.isArray(m.comments) ? m.comments : []).filter(c => c && typeof c === "object" && str(c.text).trim() && HUMANS.includes(c.by))
+      .map(c => ({id: c.id ? String(c.id) : uid(), by: c.by, text: str(c.text, 300).trim(), at: Number(c.at) || 0})).slice(-100) }));
   out.grocery = objList(d.grocery).filter(g => str(g.name).trim()).map(g => Object.assign({}, g, {
     id: g.id ? String(g.id) : uid(), name: str(g.name, 80).trim(), qty: str(g.qty, 120), aisle: AISLES.includes(g.aisle) ? g.aisle : guessAisle(str(g.name)),
     checked: !!g.checked, recipeId: g.recipeId ? String(g.recipeId) : null, added: Number(g.added) || Date.now() }));
@@ -1392,8 +1396,10 @@ const nameOf = k => state.people[k] ? state.people[k].name : "";
 const other = k => k === "sam" ? "charlie" : "sam";
 
 /* ---------- render ---------- */
+const navKey = () => [prefs.tab, prefs.kitchenTab, prefs.moreTab, prefs.budgetTab, prefs.todayView, prefs.fam].join("|");
 function render(){
   if(!TABS.some(t => t[0] === prefs.tab)) prefs.tab = "today";
+  if(typeof notifyQ !== "undefined" && notifyQ.nudgeAt && notifyQ.nudgeAt !== navKey()) nudgeDismiss();
   applyLook();
   $("#who").innerHTML = HUMANS.map(k => { const st = state.people[k].status;
     return `<button type="button" data-act="goFam" data-id="${k}" aria-label="${esc(nameOf(k))}'s profile${st.text ? ": " + esc(st.text) : ""}"><span class="av">${sprite(k)}</span>${st.text ? `<span class="st" aria-hidden="true"></span>` : ""}<span class="nm">${esc(nameOf(k))}</span></button>`; }).join("");
@@ -1401,7 +1407,7 @@ function render(){
   const v = $("#view");
   v.innerHTML = ({today:viewToday, chores:viewChores, kitchen:viewKitchen, budget:viewBudgetArea, more:viewMore})[prefs.tab]();
   const fab = $("#fab");
-  const kfab = {recipes:["newRecipe","New recipe"], plan:["planDinner","Plan a meal"], pantry:["newPantry","Add item"]}[prefs.kitchenTab];
+  const kfab = {recipes:["newRecipe","New recipe"], plan:["planMeal","Plan a meal"], pantry:["newPantry","Add item"]}[prefs.kitchenTab];
   const fabs = {chores:["newChore","New chore"]};
   if(prefs.tab === "today" && (prefs.todayView === "week" || prefs.todayView === "month")) fabs.today = ["newEvent","Add event"];
   const bfab = {spending:["newTxn","Add spending"], fund:["fundIn","Add money"]}[BTABS[prefs.budgetTab] ? prefs.budgetTab : "spending"];
@@ -1490,7 +1496,7 @@ function viewTodayMain(){
     : `<div class="empty"><p>${anyHealthLogged() ? "No checkups or boosters due in the next 30 days." : "No checkups logged yet. Add dentist, eye and vet visits in Family and they'll show up here when due."}</p></div>`}
   </section>
 
-  ${pinned.length ? `<section class="sec"><div class="sec-head"><span class="label">Pinned notes</span><button class="link" type="button" data-act="tab" data-id="more">Board</button></div>
+  ${pinned.length ? `<section class="sec"><div class="sec-head"><span class="label">Pinned notes</span><button class="link" type="button" data-act="goTo" data-id="more/notes">Board</button></div>
     <div class="board">${pinned.map(noteCard).join("")}</div></section>` : ""}
 
   ${billsDueHTML()}
@@ -1505,7 +1511,11 @@ function dinnerCardHTML(){
     <div class="actions" style="margin-top:8px;justify-content:flex-start"><button type="button" class="btn small" data-act="planDinner">Plan dinner</button><button type="button" class="link" data-act="whatCanWeMake">What can we make?</button></div></div></section>`;
   return `<section class="card soon-card"><span class="ic">${IC.kitchen}</span><div style="flex:1;min-width:0"><h3>Tonight's dinner</h3>
     ${dinners.map(m => { const r = m.recipeId && state.recipes.find(x => x.id === m.recipeId);
-      return r ? `<button type="button" class="link dinner-link" data-act="openRecipe" data-id="${r.id}" style="padding-left:0;font-size:1rem">${esc(r.title)} →</button>` : `<p>${esc(mealLabel(m))}</p>`; }).join("")}
+      if(!Array.isArray(m.comments)) m.comments = [];
+      const last = m.comments[m.comments.length - 1];
+      return (r ? `<button type="button" class="link dinner-link" data-act="openRecipe" data-id="${r.id}" style="padding-left:0;font-size:1rem">${esc(r.title)} →</button>` : `<p>${esc(mealLabel(m))}</p>`)
+        + (last ? `<p class="mlast"><b>${esc(nameOf(last.by))}:</b> ${esc(last.text)}${m.comments.length > 1 ? ` <span class="small">(+${m.comments.length - 1} more)</span>` : ""}</p>` : "")
+        + `<button type="button" class="link" data-act="editMeal" data-id="${m.id}" style="padding-left:0">${m.comments.length ? "Reply" : "Comment"}</button>`; }).join("")}
     <button type="button" class="link" data-act="goKitchen" data-id="plan" style="padding-left:0">See the week</button></div></section>`;
 }
 function closestHTML(){
@@ -1555,7 +1565,7 @@ function viewFamily(){
     <div class="prof ${k}"><div class="big">${sprite(k)}</div>
       <div style="min-width:0;flex:1"><h2>${esc(p.name)}</h2><div class="muted small">${cat ? "Our cat" : (k==="sam" ? "Samantha Zenteno" : "Charlie Purdom")}</div>
       <button class="link" type="button" data-act="editBasics" style="padding-left:0">Edit details</button>${!cat && k === prefs.user ? ` <button class="link" type="button" data-act="setStatus">Change status</button>` : ""}</div></div>
-    ${cat ? "" : `<div class="profstatus" style="margin-top:12px"><span class="face">${faceSVG(k, p.status.face)}</span><div style="min-width:0;padding-top:4px"><span class="small muted">${statusSet(p.status) ? `${esc(FACE_LABEL[p.status.face])} · ${esc(sinceText(p.status.at))}` : "No status set"}</span>${p.status.text ? `<br><span class="bub">${esc(p.status.text)}</span>` : ""}</div></div>`}
+    ${cat ? "" : `<div class="profstatus" style="margin-top:12px"><span class="face">${faceSVG(k, p.status.face)}</span><div style="min-width:0;padding-top:4px"><span class="small muted">${statusSet(p.status) ? `${esc(FACE_LABEL[p.status.face])} · ${esc(sinceText(p.status.at))}` : "No status set"}</span>${p.status.text ? `<br><span class="sbub">${esc(p.status.text)}</span>` : ""}</div></div>`}
     <div class="facts">${facts.map(([a,b]) => `<div class="fact"><span class="label">${esc(a)}</span><b>${esc(b)}</b></div>`).join("")}</div>
   </section>
   <p class="private">${IC.lock} ${sync.status === "on" ? "Shared only between your two Google accounts, in your private zen·dom database." : "Stored only on this device. Nothing is uploaded unless you sign in to share between phones."}</p>
@@ -2026,7 +2036,7 @@ function viewPlan(){
       return `<section class="day ${d === t ? "is-today" : ""}" aria-label="${esc(dt.toLocaleDateString(undefined,{weekday:"long",month:"long",day:"numeric"}))}">
         <div class="dh"><span><b>${dt.toLocaleDateString(undefined,{weekday:"short"})}</b> <span class="muted">${dt.getDate()}</span>${d === t ? ' <span class="pill today">Today</span>' : ""}</span>
           <button type="button" class="link" data-act="addMeal" data-id="${d}">+ Add</button></div>
-        ${ms.length ? ms.map(m => `<button type="button" class="meal" data-act="editMeal" data-id="${m.id}"><span class="slot">${SLOTS[m.slot]}</span><span class="mt">${esc(mealLabel(m))}</span></button>`).join("") : `<span class="small muted">Nothing planned</span>`}
+        ${ms.length ? ms.map(m => `<button type="button" class="meal" data-act="editMeal" data-id="${m.id}"><span class="slot">${SLOTS[m.slot]}</span><span class="mt">${esc(mealLabel(m))}</span>${(m.comments || []).length ? `<span class="mc">${m.comments.length} ${m.comments.length === 1 ? "comment" : "comments"}</span>` : ""}</button>`).join("") : `<span class="small muted">Nothing planned</span>`}
       </section>`; }).join("")}</div>`;
 }
 
@@ -2443,6 +2453,8 @@ function mealForm(id, date, recipeId){
     ${field("mrecipe","Recipe", `<select id="mrecipe" name="mrecipe"><option value="">No recipe</option>${opts.map(r => `<option value="${r.id}" ${d.recipeId===r.id?"selected":""}>${esc(r.title)}</option>`).join("")}</select>`)}
     ${field("mtext","Or just a note", `<input id="mtext" name="mtext" maxlength="80" value="${esc(d.text)}" placeholder="Leftovers, takeout, dinner at mom's…">`)}
     ${m && m.recipeId && state.recipes.some(r => r.id === m.recipeId) ? `<button type="button" class="btn ghost small" data-act="openRecipe" data-id="${m.recipeId}" style="align-self:flex-start">Open recipe</button>` : ""}
+    ${m && (m.comments = Array.isArray(m.comments) ? m.comments : []).length ? `<div class="thread" aria-label="Comments">${m.comments.map(c => `<div class="reply"><span class="av ${c.by}">${sprite(c.by)}</span><div class="bub"><p>${esc(c.text)}</p><span class="when"><span>${esc(nameOf(c.by))} · ${new Date(c.at).toLocaleString(undefined,{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})}</span>${c.by === prefs.user ? `<button type="button" data-act="delMealComment" data-id="${m.id}" data-c="${c.id}" aria-label="Delete comment">Delete</button>` : ""}</span></div></div>`).join("")}</div>` : ""}
+    ${field("mcomment", m && m.comments.length ? "Add a comment" : "Comment", `<textarea id="mcomment" name="mcomment" maxlength="300" placeholder="I'll cook! · Can we do 7 instead? · Need anything from the store?"></textarea>`, "Optional. Saved with the meal.")}
     ${footer(m ? "delMeal:" + m.id : "")}`,
   form => {
     const date = val(form,"mdate"), slot = val(form,"slot"), rid = val(form,"mrecipe"), text = val(form,"mtext");
@@ -2451,9 +2463,13 @@ function mealForm(id, date, recipeId){
     if(rid && !state.recipes.some(r => r.id === rid)) return fail("mrecipe","That recipe no longer exists.");
     if(!rid && !text) return fail("mtext","Pick a recipe or write a short note.");
     const data = {date, slot, recipeId: rid || null, text};
-    if(m) Object.assign(m, data); else state.meals.push(Object.assign({id:uid()}, data));
+    const note = form.elements.mcomment.value.trim().slice(0, 300);
+    const target = m ? Object.assign(m, data) : Object.assign({id:uid(), comments:[]}, data);
+    if(!Array.isArray(target.comments)) target.comments = [];
+    if(!m) state.meals.push(target);
+    if(note) target.comments.push({id:uid(), by:prefs.user, text:note, at:Date.now()});
     planWeek = weekStart(date);
-    save(); closeSheet(); render(); toast(m ? "Meal saved" : `Planned for ${parse(date).toLocaleDateString(undefined,{weekday:"long"})}`);
+    save(); closeSheet(); render(); toast(note ? "Comment added" : m ? "Meal saved" : `Planned for ${parse(date).toLocaleDateString(undefined,{weekday:"long"})}`);
   });
 }
 
@@ -2493,6 +2509,7 @@ function pantryForm(id){
     if(same && warnDuplicate(form, "pname", same.id, `“${same.name}” is already in ${ROOMS[same.room]}${same.qty ? ` (${same.qty})` : ""}. Tap Save again to add a second entry.`, "openDupPantry", same.id)) return;
     if(p){ Object.assign(p, data); p.example = false; } else state.pantry.push(Object.assign({id:uid(), example:false}, data));
     prefs.pantryRoom = rm; savePrefs();
+    if(prefs.tab === "kitchen" && prefs.pantryRoom !== rm){ prefs.pantryRoom = rm; savePrefs(); }
     save(); closeSheet(); render(); toast(p ? "Saved" : `Added to ${ROOMS[rm]}`);
   });
 }
@@ -2554,7 +2571,12 @@ const KITCHEN_ACTIONS = {
   wake: async () => { try { if(!navigator.wakeLock) throw 0; wakeLock = await navigator.wakeLock.request("screen"); toast("Screen will stay on while this is open"); } catch(e){ toast("This browser can't keep the screen on"); } },
   week: id => { const n = +id; planWeek = n === 0 ? weekStart(todayStr()) : addDays(curWeek(), 7 * n); render(); },
   addMeal: id => mealForm(null, id),
+  planMeal: () => { const ws = curWeek(), t = todayStr(); mealForm(null, t >= ws && t <= addDays(ws, 6) ? t : ws); },
   editMeal: id => mealForm(id),
+  delMealComment: (id, el) => { const m = state.meals.find(x => x.id === id); if(!m) return;
+    const i = m.comments.findIndex(c => c.id === el.dataset.c && c.by === prefs.user); if(i < 0) return;
+    const removed = m.comments.splice(i, 1)[0]; save(); render(); mealForm(id);
+    toast("Comment deleted", () => { m.comments.splice(i, 0, removed); save(); render(); if($("#sheetRoot").innerHTML) mealForm(id); }); },
   shopWeek: () => { const ws = curWeek(), end = addDays(ws, 6); let tot = {added:0, merged:0, skipped:[]};
     state.meals.filter(m => m.date >= ws && m.date <= end && m.recipeId).forEach(m => { const r = state.recipes.find(x => x.id === m.recipeId); if(!r) return;
       const res = addLinesToGrocery(r.ingredients, 1, r.id); tot.added += res.added; tot.merged += res.merged; tot.skipped.push(...res.skipped); });
@@ -2659,7 +2681,7 @@ function payBackHTML(me){
     <h3>Pay ${esc(nameOf(o.to))} back ${money(o.cents)}</h3><p>Your half of shared spending. This goes away when you record the payment.</p>
     <div class="actions" style="margin-top:8px;justify-content:flex-start">${v ? `<a class="btn ghost small" href="${esc(venmoLink(v, o.cents))}" target="_blank" rel="noopener">Venmo</a>` : ""}
       <button type="button" class="btn small" data-act="settleUp">I paid</button>
-      <button type="button" class="link" data-act="tab" data-id="budget">See spending</button></div></div></section>`;
+      <button type="button" class="link" data-act="goTo" data-id="budget/spending">See spending</button></div></div></section>`;
 }
 function monthStats(k){
   const tx = state.budget.txns.filter(t => t.date.slice(0, 7) === k);
@@ -3171,6 +3193,14 @@ const EV_REPEAT = {none:"Doesn't repeat", weekly:"Every week", monthly:"Every mo
 let calWeek = null, calMonth = null, calDay = null;      // device-only view state
 const curCalWeek = () => calWeek || (calWeek = todayStr());
 const curCalMonth = () => calMonth || (calMonth = todayStr().slice(0, 7));
+// The day a new event should start on: the selected day in Month, the first day you can see in Week
+// (today if today is on screen).
+function calDefaultDay(){
+  const t = todayStr();
+  if(prefs.todayView === "month"){ const k = curCalMonth(); return calDay && calDay.slice(0, 7) === k ? calDay : (t.slice(0, 7) === k ? t : k + "-01"); }
+  if(prefs.todayView === "week"){ const ws = curCalWeek(); return t >= ws && t <= addDays(ws, 6) ? t : ws; }
+  return t;
+}
 // Every calendar item between from and to (inclusive), as {date, type, title, who, act, id, time, flag}
 function calendarItems(from, to){
   const out = [], t = todayStr();
@@ -3412,8 +3442,8 @@ const CAL_ACTIONS = {
   calWho: id => { prefs.calWho = ["all","sam","charlie"].includes(id) ? id : "all"; savePrefs(); render(); },
   calWeekNav: id => { const n = +id; calWeek = n === 0 ? todayStr() : addDays(curCalWeek(), 7 * n); render(); },
   calMonthNav: id => { const n = +id; calMonth = n === 0 ? todayStr().slice(0, 7) : addMonthKey(curCalMonth(), n); calDay = null; render(); },
-  calPick: id => { if(isDate(id)){ calDay = id; render(); } },
-  newEvent: id => eventForm(null, isDate(id) ? id : null),
+  calPick: id => { if(isDate(id)){ calDay = id; calMonth = id.slice(0, 7); render(); } },
+  newEvent: id => eventForm(null, isDate(id) ? id : calDefaultDay()),
   editEvent: id => eventForm(id),
   icsFile: id => { const e = calEventById(id); if(!e) return;
     try {
@@ -4157,6 +4187,7 @@ document.addEventListener("click", e => {             // tap Paprika for a heart
 /* ---------- sheet (bottom modal) ---------- */
 let lastFocus = null;
 function openSheet(title, inner, onSubmit, autofocus = true){
+  if(typeof nudgeDismiss === "function" && $("#nudgeRoot").innerHTML) nudgeDismiss();
   lastFocus = document.activeElement;
   $("#sheetRoot").innerHTML = `<div class="backdrop" data-act="closeSheet"></div>
     <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle"><form class="in" id="sheetForm" novalidate>
@@ -4226,7 +4257,10 @@ function choreForm(id){
     const data = {title, owner: HUMANS.includes(owner) ? owner : "", freq, everyDays: freq==="custom" ? +n : null, start, standard: val(form,"standard"), cpe:{c:val(form,"cpeC"), p:val(form,"cpeP"), e:val(form,"cpeE")}};
     if(c){ Object.assign(c, data); c.example = false; if(freq === "once" && c.lastDone === todayStr()) c.done = true; }
     else state.chores.push(Object.assign({id:uid(), lastDone:null, history:[], done:false, example:false}, data));
-    save(); closeSheet(); render(); toast(c ? "Card saved" : "Card added");
+    const fkey = !data.owner ? "none" : data.owner === prefs.user ? "me" : "them";
+    const moved = prefs.tab === "chores" && prefs.choreFilter !== "all" && prefs.choreFilter !== fkey;
+    if(moved){ prefs.choreFilter = fkey; savePrefs(); }
+    save(); closeSheet(); render(); toast((c ? "Card saved" : "Card added") + (moved ? ` · showing ${fkey === "none" ? "unassigned" : nameOf(data.owner) + "'s"} cards` : ""));
   });
   // show custom-days only when needed
   const sync = () => { $("#f-everyDays").hidden = $("#freq").value !== "custom"; };
@@ -4369,7 +4403,7 @@ function statusCardHTML(me){
     return `<button type="button" class="strow" data-act="${mine ? "setStatus" : "goFam"}" data-id="${k}" aria-label="${mine ? "Your status" : esc(nameOf(k)) + "'s status"}: ${has ? esc(FACE_LABEL[st.face] + (st.text ? ", " + st.text : "")) : "none"}">
       <span class="face">${faceSVG(k, st.face)}</span>
       <span class="tx"><b>${mine ? "You" : esc(nameOf(k))}</b>${has ? `<span class="when">· ${esc(sinceText(st.at))}</span>` : ""}
-        ${st.text ? `<br><span class="bub">${esc(st.text)}</span>` : `<span class="hint">${has ? "" : (mine ? "Tap to pick a face and say something" : "No status yet")}</span>`}</span></button>`; };
+        ${st.text ? `<br><span class="sbub">${esc(st.text)}</span>` : `<span class="hint">${has ? "" : (mine ? "Tap to pick a face and say something" : "No status yet")}</span>`}</span></button>`; };
   return `<section class="card status-card" aria-label="Statuses">${row(me, true)}${row(other(me), false)}</section>`;
 }
 function statusForm(){
@@ -4521,6 +4555,10 @@ function toast(msg, undo){
 /* ---------- actions (event delegation) ---------- */
 const ACTIONS = {
   tab: id => { prefs.tab = id; savePrefs(); render(); window.scrollTo(0,0); },
+  // "tab/subtab", e.g. more/notes: open a tab on a particular sub-tab
+  goTo: id => { const [t, sub] = String(id).split("/"); if(!TABS.some(x => x[0] === t)) return; prefs.tab = t;
+    if(t === "more" && MTABS[sub]) prefs.moreTab = sub; if(t === "budget" && BTABS[sub]) prefs.budgetTab = sub; if(t === "kitchen" && KTABS[sub]) prefs.kitchenTab = sub;
+    savePrefs(); render(); window.scrollTo(0,0); },
   setUser: id => { if(!HUMANS.includes(id)) return;
     const signed = sync.user && Object.keys(ACCOUNTS).find(k => ACCOUNTS[k].includes(sync.user.email));
     if(signed && signed !== id){ toast(`This phone is signed in as ${nameOf(signed)}`); return; }
@@ -4810,7 +4848,10 @@ function describeChange(key, o, n){
     return null;
   }
   if(kind === "grocery"){ if(!n) return null; if(!o) return `added ${clip(n.name, 30)} to the grocery list`; if(n.checked && !o.checked) return `got ${clip(n.name, 30)}`; return null; }
-  if(kind === "meal"){ if(!n || o) return null; const d = parse(n.date).toLocaleDateString(undefined, {weekday:"long"}); return `planned ${SLOTS[n.slot].toLowerCase()} for ${d}: ${clip(mealLabel(n), 30)}`; }
+  if(kind === "meal"){
+    if(n && o && (n.comments || []).length > (o.comments || []).length){ const c = n.comments[n.comments.length - 1];
+      return `commented on ${parse(n.date).toLocaleDateString(undefined, {weekday:"long"})}'s ${SLOTS[n.slot].toLowerCase()}: “${clip(c && c.text, 50)}”`; }
+    if(!n || o) return null; const d = parse(n.date).toLocaleDateString(undefined, {weekday:"long"}); return `planned ${SLOTS[n.slot].toLowerCase()} for ${d}: ${clip(mealLabel(n), 30)}`; }
   if(kind === "event"){
     if(!n) return o ? `removed “${clip(o.title, 40)}” from the calendar` : null;
     if(!o) return `added “${clip(n.title, 40)}” on ${niceDate(n.date)}`;
@@ -4835,7 +4876,7 @@ function notifyCollect(writes, cur){
     let o = null; try { o = before ? JSON.parse(before) : null; } catch(e){}
     const n = w.data.del ? null : cur[w.id];
     const d = NOTIFY.url && sync.user ? describeChange(w.id, o, n) : null;
-    if(d){ if(w.id.startsWith("note~")) notifyQ.items.push(d); else nudges.push(d); }
+    if(d){ if(w.id.startsWith("note~") || d.startsWith("commented on ")) notifyQ.items.push(d); else nudges.push(d); }
     if(w.data.del) delete sync.shadow[w.id]; else sync.shadow[w.id] = w.data.j;
   });
   if(notifyQ.items.length){ clearTimeout(notifyQ.timer); notifyQ.timer = setTimeout(() => notifySend(false), 1500); }
@@ -4846,8 +4887,10 @@ function showNudge(items){
   notifyQ.nudge = (notifyQ.nudge && $("#nudgeRoot").innerHTML ? notifyQ.nudge : []).concat(items);
   const other = nameOf(other_(sync.who || prefs.user));
   $("#nudgeRoot").innerHTML = `<div class="nudge" role="status"><span>Tell ${esc(other)}?</span><button type="button" class="btn small" data-act="nudgeSend">Notify</button><button type="button" class="nx" data-act="nudgeClose" aria-label="No, don't tell ${esc(other)}">✕</button></div>`;
-  clearTimeout(nudgeTimer); nudgeTimer = setTimeout(() => { $("#nudgeRoot").innerHTML = ""; notifyQ.nudge = null; }, 9000);
+  notifyQ.nudgeAt = navKey();
+  clearTimeout(nudgeTimer); nudgeTimer = setTimeout(nudgeDismiss, 9000);
 }
+function nudgeDismiss(){ clearTimeout(nudgeTimer); $("#nudgeRoot").innerHTML = ""; notifyQ.nudge = null; notifyQ.nudgeAt = null; }
 function notifyBody(items){
   const who = nameOf(sync.who || prefs.user), u = [...new Set(items)];
   return clip(u.length === 1 ? `${who} ${u[0]}` : `${who} ${u[0]}, and ${u.length - 1} more`, 178);
@@ -4922,7 +4965,7 @@ function notifySection(){
   else if(IS_IOS && !IS_STANDALONE) body = `<p class="small" style="margin:0">On iPhone, notifications only work in the Home Screen app. Open zen·dom from its icon and turn them on there.</p>`;
   else if(pushState.supported === false) body = `<p class="small" style="margin:0">This browser can't show notifications.</p>`;
   else body = `
-    <label class="setrow" style="cursor:pointer"><span><b>Notes and nudges from ${esc(other)}</b><span class="small muted" style="display:block">New notes and replies right away, plus anything ${esc(other)} taps “Notify” on.</span></span>
+    <label class="setrow" style="cursor:pointer"><span><b>Notes and nudges from ${esc(other)}</b><span class="small muted" style="display:block">New notes, replies and meal comments right away, plus anything ${esc(other)} taps “Notify” on.</span></span>
       <input type="checkbox" data-change="pushPref" data-id="instant" ${pu.instant ? "checked" : ""} ${pushState.busy ? "disabled" : ""} style="width:26px;height:26px;accent-color:var(--accent)"></label>
     <label class="setrow" style="cursor:pointer"><span><b>Morning reminders</b><span class="small muted" style="display:block">Around 8:30 am: what's due today for both of you, and anything overdue.</span></span>
       <input type="checkbox" data-change="pushPref" data-id="morning" ${pu.morning ? "checked" : ""} ${pushState.busy ? "disabled" : ""} style="width:26px;height:26px;accent-color:var(--accent)"></label>
@@ -4965,8 +5008,8 @@ Object.assign(ACTIONS, {
     const pu = pushLoad(); if(pu && pu.id && be.push){ try { await be.push.removeDevice(pu.id); await be.push.disable(); } catch(e){} pushStore(null); }
     try { await be.signOut(); } catch(e){} syncStopped(); toast("Signed out. Everything stays on this phone."); },
   pushTest: () => pushTest(),
-  nudgeClose: () => { clearTimeout(nudgeTimer); $("#nudgeRoot").innerHTML = ""; notifyQ.nudge = null; },
-  nudgeSend: async () => { const items = notifyQ.nudge || []; clearTimeout(nudgeTimer); $("#nudgeRoot").innerHTML = ""; notifyQ.nudge = null;
+  nudgeClose: () => nudgeDismiss(),
+  nudgeSend: async () => { const items = notifyQ.nudge || []; nudgeDismiss();
     const other = nameOf(other_(sync.who || prefs.user)), r = await notifySend(false, items);
     toast(!r ? "Couldn't reach the notifier." : r.sent ? `${other} was notified` : `${other} hasn't turned on notifications yet`); }
 });
