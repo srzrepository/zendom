@@ -52,4 +52,10 @@ p, out = run("2026-10-29T15:20:00Z", devs=[{"owner": "samzenteno@gmail.com", "to
 check("nobody opted in: nothing sent", not out and "No phones" in p.stdout)
 p, out = run("2026-10-29T03:00:00Z", extra={"FORCE": "1"})
 check("manual 'send now' ignores the time window", len([m for m in out if "to" in m]) == 2, p.stdout + p.stderr[-300:])
+
+# a half-pasted secret is explained (shows up as a GitHub annotation), not a bare crash
+bad = SA[1:]                                             # missing the opening {
+e = dict(os.environ, GOOGLE_SA=bad, ZD_NOW="2026-10-29T15:20:00Z", NODE_PATH="/opt/npm-tools/node_modules")
+pb = subprocess.run(["node", ROOT + "/tools/morning.mjs"], env=e, capture_output=True, text=True, timeout=60)
+check("a broken GOOGLE_SA secret is explained as a GitHub annotation", pb.returncode == 1 and "::error title=Morning reminders::The GOOGLE_SA secret in GitHub isn't the whole" in pb.stdout, pb.stdout[-300:] + pb.stderr[-300:])
 print(f"\n{sum(res)} of {len(res)} morning checks passed"); sys.exit(0 if all(res) else 1)

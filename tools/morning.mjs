@@ -12,7 +12,20 @@ const TZ = "America/Los_Angeles";
 const APP_URL = "https://srzrepository.github.io/zendom/";
 const env = { GOOGLE_SA: process.env.GOOGLE_SA || "" };
 if (!env.GOOGLE_SA) { console.log("GOOGLE_SA is not set: nothing to do."); process.exit(0); }
-const sa = JSON.parse(env.GOOGLE_SA);
+// Problems are explained in plain words and also printed as a GitHub "annotation", which shows up
+// on the run's summary page (and is readable without opening the full log).
+function explain(msg) { console.log("::error title=Morning reminders::" + msg.replace(/\n/g, " ")); console.error(msg); process.exit(1); }
+process.on("unhandledRejection", e => explainError(e));
+process.on("uncaughtException", e => explainError(e));
+function explainError(e) {
+  const m = String(e && e.message || e);
+  if (/google token 4\d\d/.test(m)) explain("Google turned the GOOGLE_SA key away (" + m + "). The key may have been deleted or replaced: paste the current service-account .json into GitHub → Settings → Secrets and variables → Actions → GOOGLE_SA.");
+  if (/firestore list 40[134]/.test(m)) explain("The database refused to list phones (" + m + "). The service account may be missing the Firebase permissions.");
+  if (/Executable doesn't exist|browserType\.launch/i.test(m)) explain("The headless browser didn't start: " + m.slice(0, 300));
+  explain("Morning reminders stopped: " + m.slice(0, 400));
+}
+let sa; try { sa = JSON.parse(env.GOOGLE_SA); if (!sa.private_key || !sa.client_email) throw 0; }
+catch (e) { explain("The GOOGLE_SA secret in GitHub isn't the whole service-account file. It should start with { and end with }: paste the entire .json contents (GitHub → Settings → Secrets and variables → Actions → GOOGLE_SA)."); }
 const base = process.env.ZD_FIRESTORE || `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents`;
 const now = process.env.ZD_NOW ? new Date(process.env.ZD_NOW) : new Date();
 const local = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hourCycle: "h23" })
