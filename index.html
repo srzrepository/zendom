@@ -1688,6 +1688,7 @@ function viewSettings(){
       <p class="small" style="margin:0">${sync.status === "on" ? "Everything is also kept in your shared database. A backup copy is still a good idea now and then: keep it in Notes or email it to yourself." : "Everything is saved in this browser only. Copy a backup now and then and keep it in Notes or email it to yourself."}</p>
       <div class="actions"><button class="btn small" type="button" data-act="exportData">Copy backup</button><button class="btn ghost small" type="button" data-act="importData">Restore from backup</button></div>
       ${listBackups().length ? `<p class="small muted" style="margin:0">${listBackups().length} automatic safety ${listBackups().length===1?"copy":"copies"} saved before a data upgrade or repair. <button class="link" type="button" data-act="showBackups">View</button></p>` : ""}
+      <p class="small muted" style="margin:0">zen·dom version ${BUILD}</p>
       <p class="small muted" style="margin:0">Recipe photos and PDFs stay on this phone and aren't included in the backup text.</p>
       ${storageOK ? "" : `<p class="small" style="margin:0;color:var(--late)">Saving is blocked in this browser.</p>`}
     </div>
@@ -4975,12 +4976,26 @@ async function copyText(text, fallbackEl){
 
 /* ---------- toast ---------- */
 let toastTimer;
-function toast(msg, undo){
+function toast(msg, undo, label, ms){
   clearTimeout(toastTimer);
-  $("#toastRoot").innerHTML = `<div class="toast" role="status"><span>${esc(msg)}</span>${undo ? '<button type="button" data-act="undo">Undo</button>' : ""}</div>`;
+  $("#toastRoot").innerHTML = `<div class="toast" role="status"><span>${esc(msg)}</span>${undo ? `<button type="button" data-act="undo">${esc(label || "Undo")}</button>` : ""}</div>`;
   toast.undo = undo || null;
-  toastTimer = setTimeout(() => { $("#toastRoot").innerHTML = ""; toast.undo = null; }, undo ? 5000 : 2200);
+  toastTimer = setTimeout(() => { $("#toastRoot").innerHTML = ""; toast.undo = null; }, ms || (undo ? 5000 : 2200));
 }
+/* ---- which version is this, and is there a newer one? ---- */
+const BUILD = "2026-10-30 · 27";
+let updateSeen = "";
+async function checkForUpdate(){
+  if(!/^https?:$/.test(location.protocol) || navigator.onLine === false) return;
+  try {
+    const res = await fetch("index.html?v=" + Date.now(), {cache:"no-store"}); if(!res.ok) return;
+    const m = /const BUILD = "([^"]+)"/.exec(await res.text());
+    if(m && m[1] !== BUILD && m[1] !== updateSeen){ updateSeen = m[1];
+      toast("A newer version of zen·dom is ready", () => location.reload(), "Reload", 15000); }
+  } catch(e){}
+}
+window.addEventListener("load", () => setTimeout(checkForUpdate, 2500));
+document.addEventListener("visibilitychange", () => { if(!document.hidden) checkForUpdate(); });
 
 /* ---------- actions (event delegation) ---------- */
 const ACTIONS = {

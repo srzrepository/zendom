@@ -2,7 +2,7 @@
 // and (via firebase-messaging-sw.js) shows notifications when the app is closed.
 importScripts("firebase-messaging-sw.js");
 
-const APP = "zendom-app-v1", FONTS = "zendom-fonts-v1";
+const APP = "zendom-app-v2", FONTS = "zendom-fonts-v1";
 const CORE = ["./", "index.html", "firebase-bundle.js", "manifest.json", "icon-192.png", "icon-512.png", "apple-touch-icon.png"];
 
 self.addEventListener("install", e => {
@@ -17,10 +17,11 @@ self.addEventListener("activate", e => {
 // saved copy if there's no connection or it takes longer than 4 seconds.
 async function networkFirst(req) {
   const cache = await caches.open(APP);
+  // the download keeps going even if we stop waiting, and its result is saved for next time
+  const net = fetch(req).then(res => { if (res && res.ok) cache.put(req, res.clone()); return res; });
+  net.catch(() => {});
   try {
-    const res = await Promise.race([fetch(req), new Promise((_, no) => setTimeout(() => no(new Error("slow")), 4000))]);
-    if (res && res.ok) cache.put(req, res.clone());
-    return res;
+    return await Promise.race([net, new Promise((_, no) => setTimeout(() => no(new Error("slow")), 6000))]);
   } catch (err) {
     const hit = await cache.match(req, { ignoreSearch: true }) || (req.mode === "navigate" ? await cache.match("index.html") : null);
     if (hit) return hit;
@@ -37,6 +38,7 @@ async function cacheFirst(req) {
 self.addEventListener("fetch", e => {
   const req = e.request; if (req.method !== "GET") return;
   const url = new URL(req.url);
+  if (url.origin === self.location.origin && url.searchParams.has("v")) return;     // the app's own "is there a newer version?" check
   if (url.origin === self.location.origin) { e.respondWith(networkFirst(req)); return; }
   if (url.hostname === "fonts.googleapis.com" || url.hostname === "fonts.gstatic.com") { e.respondWith(cacheFirst(req)); return; }
   // everything else (Firebase, the notifier, recipe sites) goes straight to the internet as usual
