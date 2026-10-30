@@ -1336,6 +1336,135 @@ async def test_payment_memo(browser):
     await pg.context.close()
 
 
+async def test_paybacks(browser):
+    pg = await new_page(browser, clock="2026-10-30T13:00:00-07:00")
+    seed = """(() => { state.budget.categories = [{id:'d', name:'Dining out', limit:10000}, {id:'g', name:'Groceries', limit:0}, {id:'r', name:'Rent', limit:0}]; state.budget.txns = [
+        {id:'e1', kind:'expense', amount:12000, date:'2026-10-12', categoryId:'d', paidBy:'sam', shared:true, note:'Dinner w Karina', billId:null},
+        {id:'i1', kind:'income', amount:4000, date:'2026-10-20', categoryId:null, paidBy:'sam', shared:false, note:'Karina', billId:null},
+        {id:'i2', kind:'income', amount:300000, date:'2026-10-15', categoryId:null, paidBy:'sam', shared:false, note:'Paycheck', billId:null}];
+      budgetMonth = '2026-10'; prefs.spendWho = ''; save(); ACTIONS.tab('budget'); ACTIONS.btab('spending'); })()"""
+    await ev(pg, seed)
+    # nothing paired yet: the old numbers, and a suggestion card
+    check("paybacks: before pairing, $120 spent and $3,040 income", await ev(pg, "(() => { const s = monthStats('2026-10'); return [s.spent, s.income].join(); })()") == "12000,304000")
+    view = await ev(pg, "document.querySelector('#view').innerText")
+    check("paybacks: suggests pairing Karina's $40 with the dinner", "Payback for “Dinner w Karina”?" in view and "$40.00 came in" in view, view[:300])
+    check("paybacks: the paycheck isn't suggested", await ev(pg, "!bestPayback(state.budget.txns.find(t => t.id === 'i2'))"))
+    await act(pg, "pbPair", "i1")
+    st = await stored(pg)
+    i1 = [t for t in st["budget"]["txns"] if t["id"] == "i1"][0]
+    check("paybacks: Pair them links the payment to the dinner", i1.get("repays") == "e1")
+    check("paybacks: spending drops to $80, income doesn't include the $40", await ev(pg, "(() => { const s = monthStats('2026-10'); return [s.spent, s.income, s.byCat.d].join(); })()") == "8000,300000,8000")
+    check("paybacks: the lower total is what gets split (Charlie owes $40, not $60)", await ev(pg, "balance()") == 4000)
+    view = await ev(pg, "document.querySelector('#view').innerText")
+    check("paybacks: the card goes away once paired", "Payback for" not in view)
+    check("paybacks: the payback shows under the dinner with its date", await ev(pg, "(() => { const r = document.querySelector('.txrow.payback'); const prev = r && r.previousElementSibling; return !!r && r.innerText.includes('Paid back Oct 20') && r.innerText.includes('−$40.00') && prev.dataset.id === 'e1' && prev.innerText.includes('$120.00 − $40.00 paid back') && prev.innerText.includes('$80.00'); })()"))
+    check("paybacks: the payback isn't also listed as income on its own day", await ev(pg, "document.querySelectorAll('.txrow:not(.payback)[data-id=i1]').length") == 0)
+    check("paybacks: the summary counts it the same way", await ev(pg, "(() => { const w = monthWrap('2026-10'); return [w.spent, w.income, w.bal].join(); })()") == "8000,300000,4000")
+    # the owe breakdown shows the net
+    await act(pg, "oweDetail")
+    check("paybacks: owe breakdown shows paid $120 − $40 paid back", "paid $120.00 − $40.00 paid back · Sam $40.00, Charlie $40.00" in await ev(pg, "document.querySelector('.sheet').innerText"))
+    await ev(pg, "closeSheet()")
+    # editing the dinner: shows its payback; can't go below what's been paid back
+    await ev(pg, "ACTIONS.editTxn('e1')")
+    check("paybacks: the expense form lists its payback", "Karina · $40.00 · Oct 20" in await ev(pg, "document.querySelector('#pbBox').innerText"))
+    await fill(pg, {"amt": "30"}); await submit(pg)
+    check("paybacks: can't lower an expense below what's been paid back", "already been paid back" in await err_text(pg), await err_text(pg))
+    await fill(pg, {"amt": "150"}); await submit(pg)
+    check("paybacks: raising the expense keeps the payback ($150 − $40 = $110)", await ev(pg, "monthStats('2026-10').spent") == 11000 and await ev(pg, "balance()") == 5500)
+    # + Someone paid me back: opens income with the dinner picked
+    await ev(pg, "ACTIONS.editTxn('e1')"); await act(pg, "addPayback", "e1")
+    check("paybacks: + Someone paid me back opens income with the dinner picked", await ev(pg, "document.querySelector('input[name=kind][value=income]').checked && document.querySelector('#trepays').value === 'e1' && !document.querySelector('#incOnly').hidden"))
+    await fill(pg, {"amt": "200", "tnote": "Dev"}); await submit(pg)
+    check("paybacks: a payback over what's left is refused", "more than what's left" in await err_text(pg) and "$110.00" in await err_text(pg), await err_text(pg))
+    await fill(pg, {"amt": "20"}); await submit(pg)
+    check("paybacks: second payback saved and linked", await ev(pg, "state.budget.txns.filter(t => t.repays === 'e1').length") == 2 and await ev(pg, "monthStats('2026-10').spent") == 9000)
+    check("paybacks: the expense form hides the payback picker for spending", await ev(pg, "(ACTIONS.editTxn('e1'), document.querySelector('#incOnly').hidden && !document.querySelector('#pbBox').hidden)"))
+    await ev(pg, "closeSheet()")
+    # the picker suggests by name: a new income from "Karina" stars the dinner first
+    opts = await ev(pg, "(ACTIONS.newTxn(), document.querySelector('input[name=kind][value=income]').click(), [...document.querySelectorAll('#trepays option')].map(o => o.textContent))")
+    check("income form: the split box is hidden for income", await ev(pg, "document.querySelector('#f-tsplit').hidden && document.querySelector('#sharedBox').hidden"))
+    check("paybacks: income form has the picker with regular income first", opts and opts[0] == "No, it's regular income" and any("Dinner w Karina" in o for o in opts), json.dumps(opts))
+    await ev(pg, "closeSheet()")
+    # unpair by choosing regular income
+    pid = await ev(pg, "state.budget.txns.find(t => t.repays === 'e1' && t.note === 'Dev').id")
+    await ev(pg, f"ACTIONS.editTxn('{pid}')"); await fill(pg, {"trepays": ""}); await submit(pg)
+    check("paybacks: choosing regular income unpairs it (counts as income again)", await ev(pg, f"!('repays' in state.budget.txns.find(t => t.id === '{pid}'))") and await ev(pg, "monthStats('2026-10').income") == 302000)
+    # deleting the expense keeps the payback as income
+    await ev(pg, "ACTIONS.editTxn('e1')"); await confirm_delete(pg)
+    i1 = await ev(pg, "state.budget.txns.find(t => t.id === 'i1')")
+    check("paybacks: deleting the expense keeps the money as income", "repays" not in i1 and i1.get("noRepay") is True and await ev(pg, "monthStats('2026-10').income") == 306000 and await ev(pg, "balance()") == 0)
+    check("paybacks: toast says so", "payback counts as income" in await ev(pg, "document.body.innerText"))
+    # Not a payback hides the card
+    await ev(pg, """(() => { state.budget.txns.push({id:'e2', kind:'expense', amount:6000, date:'2026-10-25', categoryId:'d', paidBy:'sam', shared:false, note:'Tickets for Mo', billId:null},
+        {id:'i3', kind:'income', amount:3000, date:'2026-10-27', categoryId:null, paidBy:'sam', shared:false, note:'mo tickets', billId:null}); save(); render(); })()""")
+    check("paybacks: a new match shows a card", "Payback for “Tickets for Mo”?" in await ev(pg, "document.querySelector('#view').innerText"))
+    await act(pg, "pbNo", "i3")
+    check("paybacks: Not a payback hides it and keeps it as income", "Payback for" not in await ev(pg, "document.querySelector('#view').innerText") and await ev(pg, "state.budget.txns.find(t => t.id === 'i3').noRepay === true && monthStats('2026-10').income === 309000"))
+    check("paybacks: no page errors (part 1)", not pg.errors, "; ".join(pg.errors))
+    await pg.context.close()
+
+    # --- other months, the other person, by-amount splits ---
+    pg = await new_page(browser, clock="2026-11-05T13:00:00-08:00")
+    await ev(pg, """(() => { state.budget.categories = [{id:'d', name:'Dining out', limit:0}, {id:'g', name:'Groceries', limit:0}, {id:'r', name:'Rent', limit:0}]; state.budget.txns = [
+        {id:'e1', kind:'expense', amount:12000, date:'2026-10-12', categoryId:'d', paidBy:'sam', shared:true, note:'Dinner w Karina', billId:null},
+        {id:'p1', kind:'income', amount:4000, date:'2026-11-02', categoryId:null, paidBy:'sam', shared:false, note:'Karina', billId:null, repays:'e1'},
+        {id:'e2', kind:'expense', amount:9000, date:'2026-11-01', categoryId:'g', paidBy:'charlie', shared:true, note:'Costco w Lee', billId:null},
+        {id:'p2', kind:'income', amount:3000, date:'2026-11-03', categoryId:null, paidBy:'sam', shared:false, note:'Lee', billId:null, repays:'e2'},
+        {id:'e3', kind:'expense', amount:360000, date:'2026-11-01', categoryId:'r', paidBy:'charlie', shared:true, split:{mode:'amt', sam:150000}, note:'Rent', billId:null},
+        {id:'p3', kind:'income', amount:36000, date:'2026-11-04', categoryId:null, paidBy:'charlie', shared:false, note:'Subletter', billId:null, repays:'e3'}];
+      budgetMonth = '2026-11'; save(); ACTIONS.tab('budget'); ACTIONS.btab('spending'); })()""")
+    check("paybacks: a November payback counts in October (Oct spent $80)", await ev(pg, "(() => { const o = monthStats('2026-10'), n = monthStats('2026-11'); return [o.spent, o.income, n.income].join(); })()") == "8000,0,0")
+    nov = await ev(pg, "document.querySelector('#view').innerText")
+    check("paybacks: November shows it, marked as counted in October", "Pays back “Dinner w Karina” (Oct 12) · counted there" in nov and "($40.00)" in nov, nov[-800:])
+    # Charlie bought $90 groceries; Lee paid Sam $30 back. Net $60 split 30/30, and Sam is holding Charlie's $30.
+    # Rent $3,600 by amount (Sam $1,500); $360 back from a subletter -> $3,240, Sam's part scales to $1,350.
+    check("paybacks: by-amount split shrinks in proportion (Sam's rent part $1,350)", await ev(pg, "Math.round(samPart(netTx().find(t => t.id === 'e3')))") == 135000)
+    # balance: dinner Sam paid net 8000 -> +4000; groceries Charlie paid net 6000 -> -3000, plus Sam holds 3000 -> -3000; rent -135000
+    check("paybacks: money paid back to the other person moves the balance", await ev(pg, "balance()") == 4000 - 3000 - 3000 - 135000, str(await ev(pg, "balance()")))
+    await act(pg, "oweDetail")
+    sh = await ev(pg, "document.querySelector('.sheet').innerText")
+    check("paybacks: the owe breakdown explains Lee's payback to Sam", "Sam got $30.00 back for “Costco w Lee”, which Charlie paid for" in sh, sh[:600])
+    await ev(pg, "closeSheet()")
+    check("paybacks: the payback row says who it went to", await ev(pg, "[...document.querySelectorAll('.txrow.payback')].some(r => r.innerText.includes('Paid back Nov 3 to Sam'))"))
+    # person view: Sam's share uses the lower totals; payback isn't Sam's income
+    await act(pg, "spendWho", "sam")
+    check("paybacks: Sam's view uses the lower totals and doesn't count paybacks as income", await ev(pg, "(() => { const p = personStats(monthStats('2026-11'), 'sam'); return [p.spent, p.income].join(); })()") == f"{3000 + 135000},0")
+    await act(pg, "spendWho", "")
+    # stored data: repays kept through a reload; repays on a non-income entry is dropped
+    await ev(pg, "(() => { const raw = JSON.parse(localStorage.getItem('zendom:data')); raw.budget.txns.push({id:'bad', kind:'expense', amount:500, date:'2026-11-04', paidBy:'sam', note:'x', repays:'e1', noRepay:true}); localStorage.setItem('zendom:data', JSON.stringify(raw)); })()")
+    await pg.reload(); await pg.wait_for_timeout(300)
+    txs = {t["id"]: t for t in await ev(pg, "JSON.parse(JSON.stringify(state.budget.txns))")}   # what the app loaded (storage is rewritten on the next save)
+    check("paybacks: links survive a reload", txs["p1"].get("repays") == "e1" and txs["p3"].get("repays") == "e3")
+    check("paybacks: a stray link on spending is cleaned up, the entry kept", "bad" in txs and "repays" not in txs["bad"] and "noRepay" not in txs["bad"])
+    check("paybacks: old entries without the new fields are unchanged", "repays" not in txs["e1"] and "noRepay" not in txs["e1"])
+    # cancelling the expense: payback counts as income again
+    await ev(pg, "(() => { state.budget.txns.find(t => t.id === 'e1').cancelled = true; save(); render(); })()")
+    check("paybacks: if the expense is cancelled, its payback counts as income", await ev(pg, "monthStats('2026-11').income") == 4000)
+    check("paybacks: no page errors (part 2)", not pg.errors, "; ".join(pg.errors))
+    await pg.context.close()
+
+    # --- import: a Venmo payment from Karina is offered as a payback, never paired without a pick ---
+    pg = await new_page(browser, clock="2026-10-30T13:00:00-07:00")
+    await ev(pg, """(() => { state.budget.categories = [{id:'d', name:'Dining out', limit:0}]; state.budget.txns = [
+        {id:'e1', kind:'expense', amount:12000, date:'2026-10-12', categoryId:'d', paidBy:'sam', shared:true, note:'Dinner w Karina', billId:null}];
+      budgetMonth = '2026-10'; save(); ACTIONS.tab('budget'); ACTIONS.btab('spending'); })()""")
+    csv = chr(10).join(["Username,ID,Datetime,Type,Status,Note,From,To,Amount (total)",
+        ",1,2026-10-22T10:00:00,Payment,Complete,dinner!,Karina Lopez,Samantha Zenteno,+ $40.00",
+        ",2,2026-10-23T10:00:00,Payment,Complete,books,Jo Park,Samantha Zenteno,+ $15.00", ""])
+    await pg.evaluate("c => importPreview(buildImport(c, 'venmo.csv'))", csv)
+    sels = await ev(pg, "[...document.querySelectorAll('select[data-change=impRepay]')].map(s => [s.value, [...s.options].map(o => o.textContent)])")
+    check("paybacks import: Karina's payment offers the dinner, Jo's offers nothing", sels and len(sels) == 1 and sels[0][0] == "" and "Pays back “Dinner w Karina” (Oct 12)" in sels[0][1], json.dumps(sels))
+    await pg.locator("select[data-change=impRepay]").select_option("e1")
+    await submit(pg)
+    st = await stored(pg)
+    k = [t for t in st["budget"]["txns"] if t["kind"] == "income" and t["amount"] == 4000]
+    check("paybacks import: picking it imports the payment as a payback", k and k[0].get("repays") == "e1" and await ev(pg, "monthStats('2026-10').spent") == 8000)
+    check("paybacks import: the other payment is plain income", await ev(pg, "monthStats('2026-10').income") == 1500)
+    check("paybacks import: toast says it was paired", "1 paired as a payback" in await ev(pg, "document.body.innerText"))
+    check("paybacks import: no page errors", not pg.errors, "; ".join(pg.errors))
+    await pg.context.close()
+
+
 async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch()
@@ -1358,6 +1487,7 @@ async def main():
         await test_pdf_statements(browser)
         await test_splits(browser)
         await test_payment_memo(browser)
+        await test_paybacks(browser)
         await browser.close()
     failed = [r for r in results if not r[1]]
     print(f"\n{len(results) - len(failed)} of {len(results)} checks passed")
