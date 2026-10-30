@@ -1048,6 +1048,57 @@ async def test_bedtime(browser):
     await pg.context.close()
 
 
+WRAP_SEED = """(() => {
+  const B = state.budget; B.categories = [{id:'g', name:'Groceries', limit:60000}, {id:'r', name:'Rent', limit:300000}, {id:'e', name:'Eating out', limit:20000}];
+  B.txns = [
+    {id:'1', kind:'expense', amount:300000, date:'2026-10-01', categoryId:'r', paidBy:'charlie', shared:true, note:'Rent', billId:null},
+    {id:'2', kind:'expense', amount:18450, date:'2026-10-05', categoryId:'g', paidBy:'sam', shared:true, note:"Trader Joe's", billId:null},
+    {id:'4', kind:'expense', amount:31200, date:'2026-10-21', categoryId:'e', paidBy:'sam', shared:false, note:'Birthday dinner', billId:null},
+    {id:'6', kind:'income', amount:520000, date:'2026-10-15', categoryId:null, paidBy:'sam', shared:false, note:'Paycheck', billId:null},
+    {id:'8', kind:'expense', amount:60000, date:'2026-09-10', categoryId:'g', paidBy:'sam', shared:true, note:'Costco', billId:null},
+    {id:'9', kind:'settle', amount:50000, date:'2026-10-10', categoryId:null, paidBy:'sam', shared:false, note:'', billId:null},
+    {id:'10', kind:'expense', amount:9900, date:'2026-11-01', categoryId:'g', paidBy:'charlie', shared:true, note:'Nov groceries', billId:null}];
+  save(); render(); })()"""
+
+async def test_wrapup(browser):
+    pg = await new_page(browser, clock="2026-11-02T09:00:00-08:00")
+    await ev(pg, WRAP_SEED)
+    w = await ev(pg, "monthWrap('2026-10')")
+    check("wrap-up: totals", w["spent"] == 349650 and w["income"] == 520000 and w["count"] == 3 and w["prevSpent"] == 60000, json.dumps([w["spent"], w["income"], w["count"], w["prevSpent"]]))
+    who = {x["h"]: x for x in w["who"]}
+    check("wrap-up: who paid what", who["sam"]["paid"] == 49650 and who["sam"]["shared"] == 18450 and who["sam"]["own"] == 31200 and who["charlie"]["paid"] == 300000 and who["charlie"]["n"] == 1, json.dumps(w["who"]))
+    check("wrap-up: categories, biggest first, with over-target", [c["name"] for c in w["cats"]] == ["Rent", "Eating out", "Groceries"] and w["cats"][1]["over"] == 11200, json.dumps(w["cats"]))
+    # Sep Costco +30000; Oct rent -150000, TJ +9225, settle +50000 -> -60775 (Sam owes Charlie); Nov groceries not counted
+    check("wrap-up: who owed whom at month end (later months not counted)", w["bal"] == -60775, w["bal"])
+    check("wrap-up: biggest purchase", w["biggest"]["id"] == "1")
+    view = lambda: ev(pg, "document.querySelector('#view').innerText")
+    check("wrap-up: Today shows the card in the first days of the month", "Jeff's October wrap-up is ready" in await view())
+    await act(pg, "openWrap", "2026-10")
+    sheet = await ev(pg, "document.querySelector('#sheetForm').innerText")
+    check("wrap-up: sheet says who paid and how it split", "Sam: $496.50" in sheet and "Charlie: $3,000.00" in sheet and "Sam owed Charlie $607.75 at month end" in sheet, sheet[:600])
+    check("wrap-up: Jeff compares with last month and flags overspending", "$2,896.50 more than September" in sheet and "Eating out ran $112.00 over" in sheet)
+    await ev(pg, "closeSheet()")
+    check("wrap-up: once read, the Today card goes away (this phone)", "wrap-up is ready" not in await view())
+    await ev(pg, "delete prefs.wrapSeen['2026-10']; render()")
+    await act(pg, "wrapDismiss", "2026-10")
+    check("wrap-up: Not now hides it too", "wrap-up is ready" not in await view())
+    # Budget: button for past months; this month only from the 25th
+    await ev(pg, "ACTIONS.tab('budget'); ACTIONS.btab('spending')")
+    check("wrap-up: no button for this month early on", not await ev(pg, "!!document.querySelector('#view [data-act=openWrap]')"))
+    await ev(pg, "ACTIONS.bmonth('-1')")
+    check("wrap-up: past month has a wrap-up button", await ev(pg, "document.querySelector('#view [data-act=openWrap]').dataset.id") == "2026-10")
+    await pg.context.close()
+    pg = await new_page(browser, clock="2026-10-27T09:00:00-07:00")
+    await ev(pg, WRAP_SEED); await ev(pg, "ACTIONS.tab('budget'); ACTIONS.btab('spending')")
+    check("wrap-up: from the 25th, this month's 'so far' button", "October wrap-up so far" in await ev(pg, "document.querySelector('#view').innerText"))
+    await act(pg, "openWrap", "2026-10")
+    check("wrap-up: so-far wording", "(so far)" in await ev(pg, "document.querySelector('#sheetTitle').innerText") and "So far" in await ev(pg, "document.querySelector('#sheetForm').innerText"))
+    await ev(pg, "closeSheet(); state.budget.txns = []; save(); ACTIONS.openWrap('2026-08')")
+    check("wrap-up: an empty month says so kindly", "Nothing was logged in August" in await ev(pg, "document.querySelector('#sheetForm').innerText"))
+    check("wrap-up: no page errors", not pg.errors, "; ".join(pg.errors))
+    await pg.context.close()
+
+
 async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch()
@@ -1063,6 +1114,7 @@ async def main():
         await test_links(browser)
         await test_shortcut_paste(browser)
         await test_bedtime(browser)
+        await test_wrapup(browser)
         await browser.close()
     failed = [r for r in results if not r[1]]
     print(f"\n{len(results) - len(failed)} of {len(results)} checks passed")
