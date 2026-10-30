@@ -3,7 +3,7 @@
 // If a page already defines window.zdBackend (the test suite's stand-in server), this file does nothing.
 import { initializeApp } from "firebase/app";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, getDocsFromServer, onSnapshot, writeBatch, serverTimestamp, setDoc, deleteDoc } from "firebase/firestore";
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, getDocsFromServer, onSnapshot, writeBatch, serverTimestamp, setDoc, deleteDoc, runTransaction } from "firebase/firestore";
 import { getMessaging, getToken, deleteToken, isSupported, onMessage } from "firebase/messaging";
 
 const firebaseConfig = {
@@ -46,6 +46,26 @@ if (!window.zdBackend) {
         await b.commit();
       }
     },
+    // Save with a check: read what the server has right now and let the app combine it with this phone's
+    // change before writing, all in one transaction (so two phones can't overwrite each other).
+    // merge(write, serverRecordOrNull) -> the data to store. Needs a connection; offline it rejects.
+    async writeMerged(list, merge) {
+      const out = [];
+      for (let i = 0; i < list.length; i += 100) {
+        const chunk = list.slice(i, i + 100); let res = [];
+        await runTransaction(db, async tx => {
+          const snaps = [];
+          for (const w of chunk) snaps.push(await tx.get(doc(records, w.id)));
+          res = chunk.map((w, k) => {
+            const s = snaps[k], server = s.exists() ? asRec(s) : null, data = merge(w, server);
+            tx.set(doc(records, w.id), Object.assign({}, data, { ts: serverTimestamp() }));
+            return { id: w.id, data };
+          });
+        });
+        out.push(...res);
+      }
+      return out;
+    },
     // ---- notifications (only used after someone turns them on in Settings) ----
     async idToken() { return auth.currentUser ? auth.currentUser.getIdToken() : null; },
     push: {
@@ -55,7 +75,7 @@ if (!window.zdBackend) {
       async enable(vapidKey) {
         const perm = await Notification.requestPermission();
         if (perm !== "granted") { const e = new Error("Notifications weren't allowed"); e.code = "denied"; throw e; }
-        const reg = await navigator.serviceWorker.register("firebase-messaging-sw.js");
+        const reg = await navigator.serviceWorker.register("sw.js");
         await navigator.serviceWorker.ready;
         return await getToken(getMessaging(app), { vapidKey, serviceWorkerRegistration: reg });
       },

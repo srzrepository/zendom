@@ -89,6 +89,11 @@ button{cursor:pointer}
 .brand{font-family:var(--f-display);font-size:1.45rem;font-weight:600;letter-spacing:.01em;display:flex;align-items:baseline;gap:2px}
 .brand .dot{color:var(--accent)}
 .who{display:flex;background:var(--surface-2);border-radius:var(--r-pill);padding:3px;gap:2px}
+.top{flex-wrap:wrap}
+.netpill{flex-basis:100%;order:3;display:flex;align-items:center;justify-content:center;gap:8px;margin-top:2px;padding:5px 10px;border-radius:4px;
+  background:#3b2a1e;color:#ffe9c4;font-size:.85rem;font-weight:600;box-shadow:inset 0 0 0 2px #6b4a2e}
+.netpill .dot{width:8px;height:8px;border-radius:2px;background:#e8a23a;box-shadow:0 0 0 2px rgba(232,162,58,.3)}
+.netpill[hidden]{display:none}
 .who button{border:0;background:transparent;border-radius:var(--r-pill);padding:4px 10px 4px 4px;display:flex;align-items:center;gap:6px;font-weight:600;font-size:.9rem;color:var(--muted)}
 .who button[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:var(--shadow)}
 .who .av{width:26px;height:26px;border-radius:50%;overflow:hidden;background:var(--surface)}
@@ -654,6 +659,7 @@ h2{font-size:1.7rem}
   <header class="top">
     <div class="brand" aria-label="zen dom">zen<span class="dot">·</span>dom</div>
     <div class="who" role="group" aria-label="Profiles" id="who"></div>
+    <div class="netpill" id="netPill" role="status" hidden></div>
   </header>
   <div id="banners"></div>
   <main id="view" class="view" aria-live="polite"></main>
@@ -1396,11 +1402,24 @@ const nameOf = k => state.people[k] ? state.people[k].name : "";
 const other = k => k === "sam" ? "charlie" : "sam";
 
 /* ---------- render ---------- */
+function renderNetPill(){
+  const el = $("#netPill"); if(!el) return;
+  const off = navigator.onLine === false || sync.offline;
+  el.hidden = !off;
+  el.textContent = "";
+  if(off) el.innerHTML = `<span class="dot" aria-hidden="true"></span>Offline${sync.status === "on" ? " · saving on this phone" : ""}`;
+}
+// keep a copy of the app on this phone so it opens without internet (website only, not a downloaded file)
+if("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")){
+  window.addEventListener("load", () => { navigator.serviceWorker.register("sw.js").catch(() => {}); });
+}
+window.addEventListener("online", () => { renderNetPill(); if(sync.status === "on") setTimeout(syncFlush, 300); });
+window.addEventListener("offline", () => { syncOffline(true); renderNetPill(); });
 const navKey = () => [prefs.tab, prefs.kitchenTab, prefs.moreTab, prefs.budgetTab, prefs.todayView, prefs.fam].join("|");
 function render(){
   if(!TABS.some(t => t[0] === prefs.tab)) prefs.tab = "today";
   if(typeof notifyQ !== "undefined" && notifyQ.nudgeAt && notifyQ.nudgeAt !== navKey()) nudgeDismiss();
-  applyLook();
+  applyLook(); renderNetPill();
   $("#who").innerHTML = HUMANS.map(k => { const st = state.people[k].status;
     return `<button type="button" data-act="goFam" data-id="${k}" aria-label="${esc(nameOf(k))}'s profile${st.text ? ": " + esc(st.text) : ""}"><span class="av">${sprite(k)}</span>${st.text ? `<span class="st" aria-hidden="true"></span>` : ""}<span class="nm">${esc(nameOf(k))}</span></button>`; }).join("");
   $("#nav").innerHTML = TABS.map(([k,l]) => `<button type="button" data-act="tab" data-id="${k}" ${prefs.tab===k?'aria-current="page"':""}>${IC[k]}<span>${l}</span></button>`).join("");
@@ -4792,22 +4811,94 @@ function emptyHousehold(){
   d.budget.categories = []; d.budget.txns = []; d.budget.bills = []; d.budget.plan = {}; d.budget.fund.goals = []; d.budget.fund.entries = [];
   return d;
 }
-const sync = {status:"off", user:null, err:"", last:{}, ever:false, unsub:null, timer:0, at:0, pending:0};
-function syncLoad(){ try { const o = JSON.parse(lsGet(SYNC_KEY) || "{}"); sync.last = (o.last && typeof o.last === "object") ? o.last : {}; sync.ever = !!o.ever; } catch(e){} }
-function syncStore(){ lsSet(SYNC_KEY, JSON.stringify({last:sync.last, ever:sync.ever})); }
+const sync = {status:"off", user:null, err:"", last:{}, ever:false, unsub:null, timer:0, at:0, pending:0, offline:false, retry:0};
+const BASE_KEY = "zendom:base";                       // this phone only: last version of each record sent/received
+function syncLoad(){ try { const o = JSON.parse(lsGet(SYNC_KEY) || "{}"); sync.last = (o.last && typeof o.last === "object") ? o.last : {}; sync.ever = !!o.ever; } catch(e){}
+  try { const b = JSON.parse(lsGet(BASE_KEY) || "null"); if(b && typeof b === "object") sync.base = b; } catch(e){} }
+function syncStore(){ lsSet(SYNC_KEY, JSON.stringify({last:sync.last, ever:sync.ever})); if(sync.shadow) lsSet(BASE_KEY, JSON.stringify(sync.shadow)); }
+
+/* ---- combining two versions of one record (see step 16 notes) ---- */
+const jeq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const itemKey = x => x && typeof x === "object" && !Array.isArray(x)
+  ? (x.id != null ? "id:" + x.id : (typeof x.by === "string" && typeof x.emoji === "string" ? "re:" + x.by + "|" + x.emoji : null)) : null;
+function mergeList(b, l, r){
+  const keyed = a => Array.isArray(a) && a.every(x => itemKey(x) !== null);
+  if(!keyed(l) || !keyed(r) || (b !== undefined && !keyed(b))) return undefined;
+  const bm = new Map((b || []).map(x => [itemKey(x), x])), lm = new Map(l.map(x => [itemKey(x), x])), rm = new Map(r.map(x => [itemKey(x), x]));
+  const out = [];
+  l.forEach(x => { const k = itemKey(x);
+    if(rm.has(k)) out.push(merge3(bm.get(k), x, rm.get(k)));
+    else if(!(bm.has(k) && jeq(bm.get(k), x))) out.push(x); });          // missing there + unchanged here = they deleted it
+  r.forEach(x => { const k = itemKey(x);
+    if(lm.has(k)) return;
+    if(!(bm.has(k) && jeq(bm.get(k), x))) out.push(x); });               // missing here + unchanged there = we deleted it
+  if(out.length && out.every(x => typeof x.at === "number")) out.sort((a, c) => a.at - c.at);
+  return out;
+}
+function merge3(b, l, r){
+  if(jeq(l, r)) return l;
+  if(b !== undefined && jeq(l, b)) return r;
+  if(b !== undefined && jeq(r, b)) return l;
+  if(Array.isArray(l) && Array.isArray(r)){ const m = mergeList(b, l, r); return m === undefined ? l : m; }
+  if(l && r && typeof l === "object" && typeof r === "object" && !Array.isArray(l) && !Array.isArray(r)){
+    const bo = b && typeof b === "object" && !Array.isArray(b) ? b : undefined, o = {};
+    new Set([...Object.keys(l), ...Object.keys(r)]).forEach(k => {
+      const bk = bo ? bo[k] : undefined;
+      if(!(k in l)){ if(!(bo && (k in bo) && jeq(bk, r[k]))) o[k] = r[k]; return; }
+      if(!(k in r)){ if(!(bo && (k in bo) && jeq(bk, l[k]))) o[k] = l[k]; return; }
+      o[k] = merge3(bo ? bk : undefined, l[k], r[k]);
+    });
+    return o;
+  }
+  return l;                                                              // the same value changed on both: this phone wins
+}
+// Called inside the save transaction: what should the server store for this write?
+function mergeWrite(w, server){
+  if(w.data.del || !server || server.del) return w.data;
+  const baseJ = sync.shadow ? sync.shadow[w.id] : undefined;
+  if(server.j === w.data.j || (baseJ !== undefined && server.j === baseJ)) return w.data;     // nobody else changed it
+  let b, l, r; try { l = JSON.parse(w.data.j); r = JSON.parse(server.j); b = baseJ !== undefined ? JSON.parse(baseJ) : undefined; } catch(e){ return w.data; }
+  return Object.assign({}, w.data, {j: JSON.stringify(merge3(b, l, r)), merged: true});
+}
 function syncSchedule(){ if(sync.status !== "on") return; clearTimeout(sync.timer); sync.timer = setTimeout(syncFlush, 400); }
 function syncSetStatus(st, err){ sync.status = st; sync.err = err || ""; if(prefs.tab === "more" && prefs.moreTab === "settings" && !$("#sheetRoot").innerHTML) render(); }
 // Push every record that changed since the last sync. Returns the number of writes.
+function syncOffline(on){
+  if(sync.offline === on) return; sync.offline = on; renderNetPill();
+  clearInterval(sync.retry); sync.retry = on ? setInterval(() => { if(navigator.onLine !== false) syncFlush(); }, 30000) : 0;
+  if(prefs.tab === "more" && prefs.moreTab === "settings" && !$("#sheetRoot").innerHTML) render();
+}
 function syncFlush(){
   const be = window.zdBackend; if(!be || sync.status !== "on") return 0;
+  if(navigator.onLine === false){ syncOffline(true); return 0; }       // keep changes here; they go out when back online
   const cur = recordsOf(state), writes = [], by = sync.user ? sync.user.email : "";
   for(const k in cur){ const j = JSON.stringify(cur[k]), h = syncHash(j); if(sync.last[k] !== h){ writes.push({id:k, data:{del:false, j, t:Date.now(), by}}); sync.last[k] = h; } }
   for(const k in sync.last){ if(!(k in cur) && sync.last[k] !== null){ writes.push({id:k, data:{del:true, j:"", t:Date.now(), by}}); sync.last[k] = null; } }
   if(!writes.length) return 0;
+  const base0 = {}; writes.forEach(w => { base0[w.id] = sync.shadow ? sync.shadow[w.id] : undefined; });   // before notifyCollect moves it on
   if(typeof notifyCollect === "function") notifyCollect(writes, cur);
   syncStore(); sync.pending++;
-  be.write(writes).then(() => { sync.pending--; sync.at = Date.now(); if(sync.status === "on") syncSetStatus("on"); })
-    .catch(e => { sync.pending--; writes.forEach(w => { if(w.data.del) sync.last[w.id] = "resend"; else delete sync.last[w.id]; }); syncStore(); syncSetStatus("error", syncErrText(e)); });
+  if(sync.shadow) writes.forEach(w => { if(base0[w.id] !== undefined) sync.shadow[w.id] = base0[w.id]; else delete sync.shadow[w.id]; });   // merge against what we had before this send
+  const send = be.writeMerged ? be.writeMerged(writes, mergeWrite) : be.write(writes).then(() => writes.map(w => ({id:w.id, data:w.data})));
+  send.then(res => {
+    sync.pending--; sync.at = Date.now(); syncOffline(false);
+    const merged = (res || []).filter(x => x.data && x.data.merged);
+    (res || []).forEach(x => { if(!sync.shadow) return; if(x.data.del) delete sync.shadow[x.id]; else sync.shadow[x.id] = x.data.j; });
+    if(merged.length){                                                   // show the combined version here too
+      merged.forEach(x => { try { applyRecord(state, x.id, JSON.parse(x.data.j)); } catch(e){} });
+      state = keepIdentity(state, normalize(state), new Set(merged.map(x => x.id)));
+      merged.forEach(x => { sync.last[x.id] = syncHash(x.data.j); });
+      lsSet(KEY, JSON.stringify(state)); render(); syncSchedule();      // if tidying changed anything, it goes out next
+    }
+    syncStore(); if(sync.status === "on") syncSetStatus("on");
+  }).catch(e => {
+    sync.pending--; writes.forEach(w => { if(w.data.del) sync.last[w.id] = "resend"; else delete sync.last[w.id]; });
+    if(sync.shadow) writes.forEach(w => { if(base0[w.id] !== undefined) sync.shadow[w.id] = base0[w.id]; });
+    syncStore();
+    const c = String((e && (e.code || e.message)) || e);
+    if(navigator.onLine === false || /unavailable|offline|network|failed-precondition|deadline/i.test(c)) syncOffline(true);
+    else syncSetStatus("error", syncErrText(e));
+  });
   return writes.length;
 }
 function syncErrText(e){
@@ -4863,7 +4954,11 @@ async function syncStart(user){
     }
     if(sync.unsub) sync.unsub();
     sync.who = who || null;
-    { const cur = recordsOf(state); sync.shadow = {}; for(const k in cur) sync.shadow[k] = JSON.stringify(cur[k]); }
+    { const cur = recordsOf(state), saved = sync.base || {}; sync.shadow = {};
+      // a record with a change not yet sent keeps its saved base (so the change can still be merged); others start from what's here
+      for(const k in cur){ const j = JSON.stringify(cur[k]), unsent = sync.last[k] !== syncHash(j);
+        if(unsent){ if(saved[k] !== undefined) sync.shadow[k] = saved[k]; } else sync.shadow[k] = j; }
+      for(const k in saved) if(!(k in cur) && sync.last[k] !== null && saved[k] !== undefined) sync.shadow[k] = saved[k]; }
     try { sync.idTok = await be.idToken(); } catch(e){}
     sync.status = "on";
     sync.unsub = be.listen(syncRemote, e => syncSetStatus("error", syncErrText(e)));
@@ -4879,7 +4974,7 @@ function syncSection(){
   else if(!sync.user) body = `<p class="small" style="margin:0">Sign in with Google on both phones and you'll each see the other's changes. Nothing leaves this phone until you sign in.</p>
     <div class="actions"><button type="button" class="btn small" data-act="syncIn">Sign in with Google</button></div>`;
   else body = `<p class="small" style="margin:0">Signed in as <b>${esc(sync.user.email)}</b>.</p>
-    <p class="small" style="margin:0">${sync.status === "on" ? (sync.pending ? "Sending changes…" : `Up to date${sync.at ? " · " + new Date(sync.at).toLocaleTimeString(undefined, {hour:"numeric", minute:"2-digit"}) : ""}`) : sync.status === "connecting" ? "Connecting…" : "Not syncing right now."}</p>
+    <p class="small" style="margin:0">${sync.status === "on" && sync.offline ? "Offline. Changes are saved on this phone and will sync when you're back online." : sync.status === "on" ? (sync.pending ? "Sending changes…" : `Up to date${sync.at ? " · " + new Date(sync.at).toLocaleTimeString(undefined, {hour:"numeric", minute:"2-digit"}) : ""}`) : sync.status === "connecting" ? "Connecting…" : "Not syncing right now."}</p>
     <div class="actions"><button type="button" class="btn ghost small" data-act="syncOut">Sign out</button></div>`;
   return `<section class="sec"><span class="label">Share between phones</span>
     <div class="card" style="display:flex;flex-direction:column;gap:10px">${body}

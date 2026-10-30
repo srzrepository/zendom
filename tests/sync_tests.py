@@ -12,12 +12,13 @@ def check(name, ok, detail=""):
 
 ALLOWED = {"sam@example.com", "charliepurdomva@gmail.com"}
 class Server:
-    def __init__(self): self.recs = {}; self.log = []; self.writes = 0; self.down = False; self.devices = {}; self.notified = []
+    def __init__(self): self.recs = {}; self.ver = {}; self.log = []; self.writes = 0; self.down = False; self.devices = {}; self.notified = []
     def all(self): return [dict(id=k, **{x: v[x] for x in ("del", "j")}) for k, v in self.recs.items()]
     def write(self, lst, email):
         if self.down: raise Exception("unavailable: network down")
         if email not in ALLOWED: raise Exception("permission-denied: Missing or insufficient permissions.")
         for w in lst:
+            self.ver[w["id"]] = self.ver.get(w["id"], 0) + 1
             self.recs[w["id"]] = {"del": w["data"]["del"], "j": w["data"]["j"], "by": email}
             self.log.append(w["id"]); self.writes += 1
     def since(self, cur):
@@ -32,6 +33,15 @@ window.zdBackend = {
   async signOut(){ this._u = null; this._cbs.forEach(c => c(null)); },
   async fetchAll(){ return await window.__srvAll(); },
   async write(list){ await window.__srvWrite(list, this._u ? this._u.email : ""); },
+  // like Firestore's transaction: read the server's copy, let the app merge, write the result
+  async writeMerged(list, merge){ if(window.__noTx) { await this.write(list); return list.map(w => ({id: w.id, data: w.data})); }
+    if(!navigator.onLine) throw Object.assign(new Error("unavailable: offline"), {code: "unavailable"});
+    for(let tries = 0; tries < 8; tries++){
+      const cur = await window.__srvGet(list.map(w => w.id)); const out = list.map(w => ({id: w.id, data: merge(w, cur[w.id] || null)}));
+      const vers = {}; list.forEach(w => { vers[w.id] = cur[w.id] ? cur[w.id].v : 0; });
+      if(await window.__srvWriteIf(out, this._u ? this._u.email : "", vers)) return out;    // someone wrote in between: read again
+    }
+    throw Object.assign(new Error("aborted: too much contention"), {code: "aborted"}); },
   async idToken(){ return this._u ? "tok-" + this._u.email : null; },
   push: {
     _perm: "default",
@@ -57,6 +67,11 @@ async def phone(browser, srv, email, clock="2026-10-29T10:00:00-07:00", ua=None)
         srv.write(lst, em)
     await ctx.expose_function("__srvWrite", _w)
     await ctx.expose_function("__srvSince", lambda cur: srv.since(cur))
+    await ctx.expose_function("__srvGet", lambda ids: {i: {"del": srv.recs[i]["del"], "j": srv.recs[i]["j"], "v": srv.ver.get(i, 0)} for i in ids if i in srv.recs})
+    def _wif(lst, em, vers):
+        if any(srv.ver.get(i, 0) != v for i, v in vers.items()): return False
+        srv.write(lst, em); return True
+    await ctx.expose_function("__srvWriteIf", _wif)
     def _dev(i, d):
         if d is None: srv.devices.pop(i, None)
         else: srv.devices[i] = d
@@ -66,7 +81,7 @@ async def phone(browser, srv, email, clock="2026-10-29T10:00:00-07:00", ua=None)
         await route.fulfill(status=200, content_type="application/json", body=json.dumps({"sent": 1, "gone": 0}))
     await ctx.route("https://notify.test/**", _notify)
     await ctx.add_init_script(f"window.__email = {json.dumps(email)};" + FAKE)
-    pg = await ctx.new_page(); pg.errors = []
+    pg = await ctx.new_page(); pg.errors = []; pg.ctx = ctx
     pg.on("pageerror", lambda e: pg.errors.append(str(e)))
     await pg.goto("file://" + PAGE); await pg.wait_for_timeout(300)
     return pg
@@ -115,6 +130,57 @@ async def main():
         check("a status set on Sam's phone shows on Charlie's Today", "Heads down" in await ev(B, "ACTIONS.tab('today'); document.querySelector('.status-card').innerText") and await ev(B, "state.people.sam.status.face") == "squint")
         check("Charlie's Today is Charlie's, Sam's status is under Sam", await ev(B, "document.querySelector('.status-card .strow:last-child b').textContent") == "Sam")
 
+        # the SAME note replied to on both phones at the same moment: both replies kept
+        nid2 = "n-merge"
+        await ev(A, "state.notes.push({id:'n-merge', text:'merge test', color:'mint', pinned:true, author:'sam', created:1, updated:1, reactions:[], replies:[]}); save()")
+        await settle(A, B, ms=1600)
+        await ev(A, f"state.notes.find(n => n.id === '{nid2}').replies.push({{id:'ra', by:'sam', text:'from Sam', at:1000}}); save()")
+        await ev(B, f"state.notes.find(n => n.id === '{nid2}').replies.push({{id:'rb', by:'charlie', text:'from Charlie', at:1001}}); save()")
+        await settle(A, B, ms=2400)
+        srvn = json.loads(srv.recs["note~" + nid2]["j"])
+        check("same note, two replies at once: server keeps both", sorted(r["id"] for r in srvn["replies"]) == ["ra", "rb"], json.dumps(srvn["replies"]))
+        for X, nm in ((A, "Sam"), (B, "Charlie")):
+            got = await ev(X, f"state.notes.find(n => n.id === '{nid2}').replies.map(r => r.id).join()")
+            check(f"same note, two replies at once: {nm}'s phone shows both", got == "ra,rb", got)
+        # one phone changes a field, the other adds to a list in the same record
+        await ev(A, f"state.notes.find(n => n.id === '{nid2}').pinned = false; save()")
+        await ev(B, f"state.notes.find(n => n.id === '{nid2}').reactions.push({{by:'charlie', emoji:'❤️', at:5}}); save()")
+        await settle(A, B, ms=2400)
+        for X, nm in ((A, "Sam"), (B, "Charlie")):
+            got = await ev(X, f"(n => [n.pinned, n.reactions.map(r => r.emoji).join()])(state.notes.find(n => n.id === '{nid2}'))")
+            check(f"different parts of one note: both changes kept on {nm}'s phone", got == [False, "❤️"], json.dumps(got))
+        # a reply deleted on one phone while the other adds one
+        await ev(A, f"(n => {{ n.replies = n.replies.filter(r => r.id !== 'ra'); }})(state.notes.find(n => n.id === '{nid2}')); save()")
+        await ev(B, f"state.notes.find(n => n.id === '{nid2}').replies.push({{id:'rc', by:'charlie', text:'another', at:1002}}); save()")
+        await settle(A, B, ms=2400)
+        for X, nm in ((A, "Sam"), (B, "Charlie")):
+            got = await ev(X, f"state.notes.find(n => n.id === '{nid2}').replies.map(r => r.id).join()")
+            check(f"delete + add at once: the deletion and the new reply both stick ({nm})", got == "rb,rc", got)
+        # offline: edits wait on the phone, the bar says Offline, and they merge when back online
+        await B.ctx.set_offline(True); await B.wait_for_timeout(200)
+        check("offline: the top bar says so", await ev(B, "!document.querySelector('#netPill').hidden && document.querySelector('#netPill').textContent.includes('Offline')"))
+        await ev(B, f"state.notes.find(n => n.id === '{nid2}').replies.push({{id:'rd', by:'charlie', text:'typed offline', at:1003}}); save()")
+        await ev(A, f"state.notes.find(n => n.id === '{nid2}').replies.push({{id:'re', by:'sam', text:'meanwhile', at:1004}}); save()")
+        await settle(A, B, ms=1600)
+        check("offline: nothing sent while offline", "rd" not in srv.recs["note~" + nid2]["j"])
+        check("offline: the offline phone keeps its reply", "typed offline" in await ev(B, f"JSON.stringify(state.notes.find(n => n.id === '{nid2}').replies)"))
+        await B.reload(); await B.wait_for_timeout(600)
+        check("offline: the reply survives closing the app", "typed offline" in await ev(B, f"JSON.stringify(state.notes.find(n => n.id === '{nid2}').replies)"))
+        await B.ctx.set_offline(False); await B.wait_for_timeout(300)
+        await ev(B, "ACTIONS.syncIn()")            # the stand-in forgets sign-in on reload; real Firebase remembers it
+        await settle(A, B, ms=3000)
+        for X, nm in ((A, "Sam"), (B, "Charlie")):
+            got = await ev(X, f"state.notes.find(n => n.id === '{nid2}').replies.map(r => r.id).join()")
+            check(f"offline: back online, both replies end up on {nm}'s phone", got == "rb,rc,rd,re", got)
+        check("offline: the Offline bar goes away", await ev(B, "document.querySelector('#netPill').hidden"))
+        # status on one phone + profile edit on the other (same person record)
+        await ev(A, "state.people.sam.status = {face:'grin', emoji:'', text:'hi', at:7}; save()")
+        await ev(B, "state.people.sam.notes = 'likes spicy food'; save()")
+        await settle(A, B, ms=2400)
+        for X, nm in ((A, "Sam"), (B, "Charlie")):
+            got = await ev(X, "[state.people.sam.status.text, state.people.sam.notes]")
+            check(f"status + profile edit at once: both kept ({nm})", got == ["hi", "likes spicy food"], json.dumps(got))
+
         # different items edited at the same moment: both kept
         c1, c2 = (await ev(A, "state.chores.map(c => c.id)"))[:2]
         await ev(A, f"state.chores.find(c => c.id === '{c1}').title = 'Edited on Sam'; save()")
@@ -158,7 +224,8 @@ async def main():
         srv.down = True
         await ev(A, "state.grocery.push({id:'g-off', name:'Oat milk', qty:'', aisle:'Dairy & eggs', checked:false, recipeId:null, added:1}); save()")
         await A.wait_for_timeout(700)
-        check("offline: the phone says it will catch up", "back online" in await ev(A, "sync.err"), await ev(A, "sync.err"))
+        check("offline: the phone says it will catch up", await ev(A, "sync.offline && !document.querySelector('#netPill').hidden && !sync.err"), await ev(A, "sync.err"))
+        check("offline: Settings explains it", "will sync when you're back online" in await ev(A, "ACTIONS.tab('more'); ACTIONS.mtab('settings'); document.querySelector('#view').innerText"))
         check("offline: the change is still on Sam's phone", await ev(A, "state.grocery.some(g => g.id === 'g-off')"))
         srv.down = False
         await ev(A, "sync.status = 'on'; sync.err = ''; state.grocery.push({id:'g-on', name:'Basil', qty:'', aisle:'Produce', checked:false, recipeId:null, added:2}); save()")
