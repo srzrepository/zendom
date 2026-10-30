@@ -1177,6 +1177,38 @@ async def test_entries_import(browser):
     await pg.context.close()
 
 
+async def test_person_view(browser):
+    pg = await new_page(browser, clock="2026-10-30T09:00:00-07:00")
+    await ev(pg, """(() => { state.budget.categories = [{id:'g', name:'Groceries', limit:60000}, {id:'f', name:'Fun', limit:0}]; state.budget.txns = [
+        {id:'1', kind:'expense', amount:300000, date:'2026-10-01', categoryId:'g', paidBy:'charlie', shared:true, note:'Big shop', billId:null},
+        {id:'2', kind:'expense', amount:2000, date:'2026-10-02', categoryId:'f', paidBy:'sam', shared:false, note:'Sam book', billId:null},
+        {id:'3', kind:'expense', amount:5000, date:'2026-10-03', categoryId:'f', paidBy:'charlie', shared:false, note:'Charlie game', billId:null},
+        {id:'4', kind:'income', amount:100000, date:'2026-10-15', categoryId:null, paidBy:'sam', shared:false, note:'Sam pay', billId:null},
+        {id:'5', kind:'income', amount:80000, date:'2026-10-15', categoryId:null, paidBy:'charlie', shared:false, note:'Charlie pay', billId:null},
+        {id:'6', kind:'expense', amount:9999, date:'2026-10-04', categoryId:'f', paidBy:'sam', shared:false, note:'Cancelled thing', cancelled:true, billId:null}];
+      save(); ACTIONS.tab('budget'); ACTIONS.btab('spending'); })()""")
+    view = lambda: ev(pg, "document.querySelector('#view').innerText")
+    t = await view()
+    check("person view: Both shows the household", "$3,070.00" in t and "$1,800.00" in t and "Sam book" in t and "Charlie game" in t)
+    await act(pg, "spendWho", "sam"); t = await view()
+    check("person view: Sam's share = own + half of shared", "Sam's share" in t and "$1,520.00" in t and "$20.00 paid by Sam" in t, t[:600])
+    check("person view: Sam's income only", "Sam's income" in t and "$1,000.00" in t and "$1,800.00" not in t)
+    check("person view: Sam's list leaves out Charlie's own things", "Sam book" in t and "Big shop" in t and "Charlie game" not in t)
+    check("person view: shared entries show Sam's half", "Sam's half: $1,500.00" in t)
+    check("person view: cancelled still not counted", await ev(pg, "personStats(monthStats('2026-10'), 'sam').spent") == 152000)
+    check("person view: categories show Sam's share, targets explained", "Groceries" in t and "$1,500.00" in t and "Targets are for both of you" in t)
+    await act(pg, "spendWho", "charlie"); t = await view()
+    check("person view: Charlie's share", "$1,550.00" in t and "$3,050.00 paid by Charlie" in t and "Sam book" not in t, t[:500])
+    check("person view: remembered on this phone", await ev(pg, "JSON.parse(localStorage.getItem('zendom:prefs')).spendWho") == "charlie")
+    await act(pg, "spendWho", ""); t = await view()
+    check("person view: back to both", "Sam book" in t and "Charlie game" in t)
+    await ev(pg, "prefs.spendWho = 'sam'; budgetMonth = '2026-08'; render()")
+    check("person view: an empty month for one person is fine", "Nothing for Sam in August 2026" in await view())
+    check("status bar: the header carries its own cover for the strip above it", await ev(pg, "getComputedStyle(document.querySelector('.top'), '::before').content") in ('""', "''"))
+    check("person view: no page errors", not pg.errors, "; ".join(pg.errors))
+    await pg.context.close()
+
+
 async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch()
@@ -1195,6 +1227,7 @@ async def main():
         await test_wrapup(browser)
         await test_dinner_suggestions(browser)
         await test_entries_import(browser)
+        await test_person_view(browser)
         await browser.close()
     failed = [r for r in results if not r[1]]
     print(f"\n{len(results) - len(failed)} of {len(results)} checks passed")
