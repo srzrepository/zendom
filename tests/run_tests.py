@@ -1136,6 +1136,47 @@ async def test_dinner_suggestions(browser):
     await pg.context.close()
 
 
+async def test_entries_import(browser):
+    pg = await new_page(browser, clock="2026-10-30T09:00:00-07:00")
+    await ev(pg, """(() => { state.budget.categories = [{id:'g', name:'Groceries', limit:60000}]; state.budget.txns = [
+        {id:'m1', kind:'expense', amount:18450, date:'2026-10-03', categoryId:'g', paidBy:'sam', shared:true, note:"Trader Joe's", billId:null},
+        {id:'m2', kind:'expense', amount:4200, date:'2026-10-10', categoryId:'g', paidBy:'sam', shared:false, note:'Pharmacy', billId:null}];
+      save(); ACTIONS.tab('budget'); ACTIONS.btab('spending'); render(); })()""")
+    # details + cancelled
+    await ev(pg, "ACTIONS.editTxn('m2')")
+    await fill(pg, {"tdetails": "Allergy meds + sunscreen, order #4411"}); await pg.locator('#sheetForm input[name=tcancel]').check(); await submit(pg)
+    t = [x for x in (await stored(pg))["budget"]["txns"] if x["id"] == "m2"][0]
+    check("entries: details and cancelled save", t["details"] == "Allergy meds + sunscreen, order #4411" and t["cancelled"] is True, json.dumps(t))
+    view = await ev(pg, "document.querySelector('#view').innerText")
+    check("entries: cancelled shows in the list, marked", "Cancelled" in view and "Allergy meds" in view and await ev(pg, "!!document.querySelector('.txrow.cx')"))
+    check("entries: cancelled isn't counted in the month", await ev(pg, "monthStats('2026-10').spent") == 18450)
+    check("entries: or in the summary or who owes whom", await ev(pg, "rangeWrap('2026-10-01','2026-10-31').spent") == 18450 and await ev(pg, "balance()") == 9225)
+    await ev(pg, "ACTIONS.editTxn('m2')"); await pg.locator('#sheetForm input[name=tcancel]').uncheck(); await submit(pg)
+    check("entries: un-cancelling counts it again", await ev(pg, "monthStats('2026-10').spent") == 22650)
+    # import: a typed entry posting 2 days later, an exact re-import, and a new purchase
+    csv = "Date,Description,Amount\n10/05/2026,TRADER JOE'S #123,-184.50\n10/12/2026,PHARMACY 22,-42.00\n10/20/2026,BLUE BOTTLE,-6.75\n"
+    res = await pg.evaluate("c => buildImport(c, 'oct.csv').rows.map(x => [x.desc, x.include, x.dup])", csv)
+    by = {d: (inc, dup) for d, inc, dup in res}
+    check("import: a typed entry 2 days earlier is flagged and unticked", by["TRADER JOE'S #123"][0] is False and "Trader Joe" in by["TRADER JOE'S #123"][1] and "Oct 3" in by["TRADER JOE'S #123"][1], json.dumps(res))
+    check("import: so is one 2 days off the other way", by["PHARMACY 22"][0] is False and "Pharmacy" in by["PHARMACY 22"][1], json.dumps(res))
+    check("import: a new purchase is ticked", by["BLUE BOTTLE"][0] is True and not by["BLUE BOTTLE"][1])
+    await pg.evaluate("c => importPreview(buildImport(c, 'oct.csv'))", csv); await submit(pg)
+    n1 = len((await stored(pg))["budget"]["txns"])
+    check("import: only the new one is added", n1 == 3, n1)
+    res2 = await pg.evaluate("c => buildImport(c, 'oct.csv').rows.map(x => x.dup)", csv)
+    check("import: the same file again is all 'already imported' or matched", all(res2) and "Already imported" in res2, json.dumps(res2))
+    # each typed entry matches only one row
+    csv2 = "Date,Description,Amount\n10/03/2026,TJ A,-184.50\n10/04/2026,TJ B,-184.50\n"
+    res3 = await pg.evaluate("c => buildImport(c, 'b.csv').rows.map(x => !!x.dup)", csv2)
+    check("import: one typed entry can't hide two statement lines", sorted(res3) == [False, True], json.dumps(res3))
+    # a Venmo payment that's also on the bank statement
+    await ev(pg, "state.budget.txns.push({id:'v1', kind:'expense', amount:2500, date:'2026-10-15', categoryId:null, paidBy:'sam', shared:false, note:'Pizza · Charlie', billId:null, imp:'venmo|x', source:'venmo'}); save()")
+    res4 = await ev(pg, "buildImport('Date,Description,Amount\\n10/16/2026,VENMO PAYMENT,-25.00\\n', 'bank.csv').rows.map(x => x.dup)")
+    check("import: a Venmo payment also on the bank statement is flagged", res4[0] and "Venmo import" in res4[0], json.dumps(res4))
+    check("entries/import: no page errors", not pg.errors, "; ".join(pg.errors))
+    await pg.context.close()
+
+
 async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch()
@@ -1153,6 +1194,7 @@ async def main():
         await test_bedtime(browser)
         await test_wrapup(browser)
         await test_dinner_suggestions(browser)
+        await test_entries_import(browser)
         await browser.close()
     failed = [r for r in results if not r[1]]
     print(f"\n{len(results) - len(failed)} of {len(results)} checks passed")

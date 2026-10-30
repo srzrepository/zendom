@@ -410,6 +410,8 @@ input[type=search]{border:1.5px solid var(--line);background:var(--surface);bord
 .txrow .av.sam{background:var(--sam-soft)} .txrow .av.charlie{background:var(--charlie-soft)}
 .txrow .tb{flex:1;min-width:0;display:flex;flex-direction:column}
 .txrow .tt{font-weight:600;overflow-wrap:anywhere}
+.txrow .td{font-size:.8rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.txrow.cx .tt,.txrow.cx .ta{text-decoration:line-through;opacity:.6}
 .txrow .ts{font-size:.8rem;color:var(--muted)}
 .txrow .ta{font-variant-numeric:tabular-nums;font-weight:700;flex:none}
 .txrow .ta.income{color:var(--ok)} .txrow .ta.settle{color:var(--muted)}
@@ -2784,7 +2786,7 @@ function billInfo(b){
 // Shared expenses are split 50/50. Positive = Charlie owes Sam; negative = Sam owes Charlie.
 function balance(){
   let b = 0;
-  state.budget.txns.forEach(t => {
+  state.budget.txns.forEach(t => { if(t.cancelled) return;
     if(t.kind === "expense" && t.shared) b += (t.paidBy === "sam" ? 1 : -1) * t.amount / 2;
     if(t.kind === "settle") b += (t.paidBy === "charlie" ? -1 : 1) * t.amount;
   });
@@ -2808,12 +2810,12 @@ function payBackHTML(me){
 // Who owed whom after everything dated up to the end of a month (same 50/50 rule as balance()).
 function balanceUntil(day){
   let b = 0;
-  state.budget.txns.forEach(t => { if(t.date > day) return;
+  state.budget.txns.forEach(t => { if(t.date > day || t.cancelled) return;
     if(t.kind === "expense" && t.shared) b += (t.paidBy === "sam" ? 1 : -1) * t.amount / 2;
     if(t.kind === "settle") b += (t.paidBy === "charlie" ? -1 : 1) * t.amount; });
   return Math.round(b);
 }
-function rangeTx(from, to){ return state.budget.txns.filter(t => isDate(t.date) && t.date >= from && t.date <= to); }
+function rangeTx(from, to){ return state.budget.txns.filter(t => !t.cancelled && isDate(t.date) && t.date >= from && t.date <= to); }
 function monthWrap(k){
   const [y, m] = k.split("-").map(Number);
   return Object.assign(rangeWrap(`${k}-01`, toStr(new Date(y, m, 0)), k), {k, prevK: addMonthKey(k, -1), partial: k === todayStr().slice(0, 7)});
@@ -2925,10 +2927,10 @@ function wrapTeaserHTML(){
     <div class="actions" style="margin-top:8px;justify-content:flex-start"><button type="button" class="btn small" data-act="openWrap" data-id="${k}">Read it</button><button type="button" class="link" data-act="wrapDismiss" data-id="${k}">Not now</button></div></div></section>`;
 }
 function monthStats(k){
-  const tx = state.budget.txns.filter(t => t.date.slice(0, 7) === k);
-  const spent = tx.filter(t => t.kind === "expense").reduce((a, t) => a + t.amount, 0);
-  const income = tx.filter(t => t.kind === "income").reduce((a, t) => a + t.amount, 0);
-  const byCat = {}; tx.filter(t => t.kind === "expense").forEach(t => { byCat[t.categoryId || "none"] = (byCat[t.categoryId || "none"] || 0) + t.amount; });
+  const tx = state.budget.txns.filter(t => t.date.slice(0, 7) === k), live = tx.filter(t => !t.cancelled);   // tx: for the list; live: for totals
+  const spent = live.filter(t => t.kind === "expense").reduce((a, t) => a + t.amount, 0);
+  const income = live.filter(t => t.kind === "income").reduce((a, t) => a + t.amount, 0);
+  const byCat = {}; live.filter(t => t.kind === "expense").forEach(t => { byCat[t.categoryId || "none"] = (byCat[t.categoryId || "none"] || 0) + t.amount; });
   const budgeted = state.budget.categories.reduce((a, c) => a + lim(c, k), 0);
   return {tx, spent, income, byCat, budgeted};
 }
@@ -2997,10 +2999,11 @@ function viewBudget(){
 
   <section class="sec"><span class="label">${isNow ? "This month" : monthName(k)}</span>
     ${days.length ? days.map(d => `<div class="sec"><span class="small muted" style="font-weight:600">${parse(d).toLocaleDateString(undefined,{weekday:"short", month:"short", day:"numeric"})}</span>
-      <div class="glist">${st.tx.filter(t => t.date === d).sort((a,b) => b.amount - a.amount).map(t => `<button type="button" class="txrow" data-act="editTxn" data-id="${t.id}">
+      <div class="glist">${st.tx.filter(t => t.date === d).sort((a,b) => b.amount - a.amount).map(t => `<button type="button" class="txrow ${t.cancelled ? "cx" : ""}" data-act="editTxn" data-id="${t.id}">
         <span class="av ${t.paidBy}">${sprite(t.paidBy, "", true)}</span>
         <span class="tb"><span class="tt">${esc(t.note || (t.kind === "settle" ? "Payment between you" : t.kind === "income" ? "Income" : catName(t.categoryId)))}</span>
-          <span class="ts">${t.kind === "expense" ? `${esc(catName(t.categoryId))}${t.shared ? " · shared" : ` · ${esc(nameOf(t.paidBy))}'s`}` : t.kind === "settle" ? `${esc(nameOf(t.paidBy))} paid ${esc(nameOf(other(t.paidBy)))}` : `${esc(nameOf(t.paidBy))}`}</span></span>
+          <span class="ts">${t.cancelled ? `<span class="pill late">${t.kind === "income" ? "Didn't come in" : "Cancelled"}</span> ` : ""}${t.kind === "expense" ? `${esc(catName(t.categoryId))}${t.shared ? " · shared" : ` · ${esc(nameOf(t.paidBy))}'s`}` : t.kind === "settle" ? `${esc(nameOf(t.paidBy))} paid ${esc(nameOf(other(t.paidBy)))}` : `${esc(nameOf(t.paidBy))}`}</span>
+          ${t.details ? `<span class="td">${esc(t.details)}</span>` : ""}</span>
         <span class="ta ${t.kind}">${t.kind === "income" ? "+" : ""}${money(t.amount)}</span></button>`).join("")}</div></div>`).join("")
       : `<div class="empty"><p>No spending logged for ${esc(monthName(k))}.</p>${isNow ? `<button type="button" class="btn" data-act="newTxn">${IC.plus} Add spending</button>` : ""}</div>`}
   </section>
@@ -3022,6 +3025,8 @@ function txnForm(id, preset){
     <div id="expOnly">${field("tcat","Category", `<select id="tcat" name="tcat">${catOptions(d.categoryId)}</select>`)}</div>
     <div class="field"><span class="lab">Who paid?</span>${whoRadios("paidBy", d.paidBy)}</div>
     <label class="chip" id="sharedBox" style="align-self:flex-start;cursor:pointer"><input type="checkbox" name="shared" ${d.shared?"checked":""} style="accent-color:var(--accent)"> Shared cost (split 50/50)</label>
+    ${field("tdetails","Details", `<textarea id="tdetails" name="tdetails" maxlength="500" rows="2" placeholder="What exactly you got, order number, why it was returned…">${esc(d.details || "")}</textarea>`, "Optional")}
+    <label class="chip" style="align-self:flex-start;cursor:pointer"><input type="checkbox" name="tcancel" ${d.cancelled?"checked":""}> Cancelled or refunded (don't count it)</label>
     ${footer(t ? "delTxn:" + t.id : "")}`,
   form => {
     const kind = (form.querySelector("input[name=kind]:checked") || {}).value || "expense";
@@ -3031,10 +3036,11 @@ function txnForm(id, preset){
     const paidBy = (form.querySelector("input[name=paidBy]:checked") || {}).value;
     if(!HUMANS.includes(paidBy)) return fail("tnote","Pick who paid.");
     const cid = val(form,"tcat");
-    const data = {kind, amount, date, note:val(form,"tnote"), paidBy, categoryId: kind === "expense" && state.budget.categories.some(c => c.id === cid) ? cid : null, shared: kind === "expense" && form.elements.shared.checked};
+    const data = {kind, amount, date, note:val(form,"tnote"), paidBy, categoryId: kind === "expense" && state.budget.categories.some(c => c.id === cid) ? cid : null, shared: kind === "expense" && form.elements.shared.checked,
+      details: form.elements.tdetails.value.trim().slice(0, 500), cancelled: form.elements.tcancel.checked};
     if(t) Object.assign(t, data); else state.budget.txns.push(Object.assign({id:uid(), billId:null}, data));
     budgetMonth = date.slice(0, 7);
-    save(); closeSheet(); render(); toast(t ? "Saved" : kind === "income" ? "Income logged" : `${money(amount)} logged`);
+    save(); closeSheet(); render(); toast(data.cancelled ? "Saved as cancelled · not counted" : t ? "Saved" : kind === "income" ? "Income logged" : `${money(amount)} logged`);
   });
   const sync = () => { const exp = (document.querySelector("input[name=kind]:checked") || {}).value !== "income"; $("#expOnly").hidden = !exp; $("#sharedBox").hidden = !exp; };
   document.querySelectorAll("input[name=kind]").forEach(r => r.addEventListener("change", sync)); sync();
@@ -3143,7 +3149,7 @@ function normalizeBudget(raw){
     fund: normalizeFund(b.fund),
     txns: objs(b.txns).filter(t => isDate(t.date) && cents(t.amount) && ["expense","income","settle"].includes(t.kind)).map(t => Object.assign({}, t, {
       id: t.id ? String(t.id) : uid(), amount: cents(t.amount), paidBy: HUMANS.includes(t.paidBy) ? t.paidBy : "sam",
-      categoryId: t.kind === "expense" && catIds.has(t.categoryId) ? t.categoryId : null, shared: t.kind === "expense" && !!t.shared, note: str(t.note, 80), billId: t.billId ? String(t.billId) : null })),
+      categoryId: t.kind === "expense" && catIds.has(t.categoryId) ? t.categoryId : null, shared: t.kind === "expense" && !!t.shared, note: str(t.note, 80), details: str(t.details, 500), cancelled: !!t.cancelled, billId: t.billId ? String(t.billId) : null })),
     bills: objs(b.bills).filter(x => str(x.name).trim() && cents(x.amount) && isDate(x.nextDue)).map(x => Object.assign({}, x, {
       id: x.id ? String(x.id) : uid(), name: str(x.name, 40).trim(), amount: cents(x.amount), cycle: BILL_CYCLES[x.cycle] ? x.cycle : "monthly",
       anchorDay: clampInt(x.anchorDay, 1, 31, +x.nextDue.slice(8)),
@@ -3271,11 +3277,19 @@ function buildImport(text, fileName){
   });
   if(!out.length) return {error:"No transactions found in that file."};
   const keys = new Set(state.budget.txns.map(t => t.imp).filter(Boolean));
-  const manual = state.budget.txns.filter(t => !t.imp);
-  out.forEach(x => {
-    x.key = impKey(x.date, x.cents, x.desc);
-    if(keys.has(x.key)){ x.dup = "Already imported"; x.include = false; }
-    else if(manual.some(t => t.date === x.date && t.amount === Math.abs(x.cents))){ x.dup = "Might match an entry you typed"; x.include = false; }
+  out.forEach(x => { x.key = impKey(x.date, x.cents, x.desc); if(keys.has(x.key)){ x.dup = "Already imported"; x.include = false; } });
+  // close matches: same amount within 3 days, typed by hand or imported from a different file; each entry matches one row
+  const used = new Set();
+  out.filter(x => !x.dup).map(x => {
+    const cands = state.budget.txns.filter(t => !used.has(t.id) && t.amount === Math.abs(x.cents) && Math.abs(diffDays(t.date, x.date)) <= 3 && (!t.imp || t.source !== fmt));
+    return {x, cands};
+  }).filter(o => o.cands.length).sort((a, b) => a.cands.length - b.cands.length).forEach(({x}) => {
+    const t = state.budget.txns.filter(t => !used.has(t.id) && t.amount === Math.abs(x.cents) && Math.abs(diffDays(t.date, x.date)) <= 3 && (!t.imp || t.source !== fmt))
+      .sort((a, b) => Math.abs(diffDays(a.date, x.date)) - Math.abs(diffDays(b.date, x.date)))[0];
+    if(!t) return; used.add(t.id);
+    const what = t.note ? `“${cutText(t.note, 30)}”` : "an entry";
+    x.dup = t.imp ? `Might be ${what} from your ${t.source === "venmo" ? "Venmo" : "bank"} import (${niceDate(t.date)})` : `Might be ${what} you entered on ${niceDate(t.date)}`;
+    x.include = false;
   });
   // most bank files show spending as negative; if nearly everything is positive, it's probably the other way
   const pos = out.filter(x => x.cents > 0).length;
