@@ -1023,6 +1023,31 @@ async def test_shortcut_paste(browser):
     await pg.context.close()
 
 
+async def test_bedtime(browser):
+    pg = await new_page(browser, clock="2026-11-12T22:59:30-08:00")
+    await pg.wait_for_timeout(300)
+    lab = lambda: ev(pg, "document.querySelector('#roomCv').getAttribute('aria-label')")
+    check("bedtime: 10:59 pm is still the sofa", "on the sofa" in await lab() and await ev(pg, "!RM_RT.base.bed"))
+    await pg.clock.set_fixed_time("2026-11-12T23:00:05-08:00"); await pg.wait_for_timeout(400)
+    check("bedtime: at 11 pm the room switches by itself (no tap needed)", await ev(pg, "RM_RT.base.bed") == "phone")
+    await ev(pg, "render()")
+    check("bedtime: 11 pm label: Sam on her phone, Charlie asleep, Paprika on Charlie", "Sam up on her phone, Charlie asleep with Paprika curled up on Charlie" in await lab())
+    await pg.clock.set_fixed_time("2026-11-13T00:00:05-08:00"); await pg.wait_for_timeout(400)
+    check("bedtime: at midnight both are asleep", await ev(pg, "RM_RT.base.bed") == "asleep")
+    await pg.clock.set_fixed_time("2026-11-13T06:00:05-08:00"); await pg.wait_for_timeout(400)
+    check("bedtime: at 6 am they're back on the sofa", await ev(pg, "!RM_RT.base.bed"))
+    # the picture really changes (bed pixels differ from the sofa scene)
+    pix = await ev(pg, "(() => { const a = rmStatic(Object.assign(roomInfo(), {bed:''})).B.d, b = rmStatic(Object.assign(roomInfo(), {bed:'asleep'})).B.d; let n = 0; for(let i = 0; i < a.length; i++) if(a[i] !== b[i]) n++; return n; })()")
+    check("bedtime: the bed scene is actually drawn", pix > 500, pix)
+    # tapping Paprika on the bed still gives a heart
+    await pg.clock.set_fixed_time("2026-11-13T01:00:00-08:00"); await ev(pg, "render()"); await pg.wait_for_timeout(300)
+    box = await ev(pg, "(() => { const b = RM_RT.papBox, r = document.querySelector('#roomCv').getBoundingClientRect(); return [r.left + (b[0] + b[2]) / 2 * r.width / RM.W, r.top + (b[1] + b[3]) / 2 * r.height / RM.H]; })()")
+    await pg.mouse.click(box[0], box[1]); await pg.wait_for_timeout(100)
+    check("bedtime: tapping sleeping Paprika still says mrrp", "mrrp" in await ev(pg, "document.querySelector('#toastRoot').innerText"))
+    check("bedtime: no page errors", not pg.errors, "; ".join(pg.errors))
+    await pg.context.close()
+
+
 async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch()
@@ -1037,6 +1062,7 @@ async def main():
         await test_qol(browser)
         await test_links(browser)
         await test_shortcut_paste(browser)
+        await test_bedtime(browser)
         await browser.close()
     failed = [r for r in results if not r[1]]
     print(f"\n{len(results) - len(failed)} of {len(results)} checks passed")
