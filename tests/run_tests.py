@@ -999,6 +999,30 @@ async def test_links(browser):
     await pg.context.close()
 
 
+async def test_shortcut_paste(browser):
+    pg = await new_page(browser)
+    data = {"zendom": 1, "url": "https://cooking.example.com/recipes/123-miso-salmon", "recipe": [
+        {"@context": "https://schema.org", "@type": "NewsArticle", "headline": "x"},
+        {"@context": "https://schema.org", "@type": "Recipe", "name": "Miso-Glazed Salmon", "recipeYield": "4 servings", "totalTime": "PT25M",
+         "description": "Sweet &amp; salty.", "recipeIngredient": ["4 salmon fillets", "&frac14; cup white miso"],
+         "recipeInstructions": [{"@type": "HowToStep", "text": "Heat the broiler."}, {"@type": "HowToStep", "text": "Brush with miso and broil 8 minutes."}]}]}
+    await ev(pg, "ACTIONS.tab('kitchen'); ACTIONS.ktab('recipes'); ACTIONS.pasteRecipe()")
+    await pg.locator('#paste').fill(json.dumps(data)); await pg.locator('[data-act=fillFromPaste]').click(); await pg.wait_for_timeout(100)
+    vals = await ev(pg, "['rtitle','servings','prep','cook','ings','steps','rnotes','source'].map(id => document.querySelector('#' + id).value)")
+    check("shortcut paste: fills every field", vals == ["Miso-Glazed Salmon", "4", "", "25 min", "4 salmon fillets\n¼ cup white miso", "Heat the broiler.\nBrush with miso and broil 8 minutes.", "Sweet & salty.", "https://cooking.example.com/recipes/123-miso-salmon"], json.dumps(vals))
+    check("shortcut paste: says where it came from", "Got it from cooking.example.com: 2 ingredients and 2 steps" in await ev(pg, "document.querySelector('#pasteStatus').textContent"))
+    await submit(pg)
+    check("shortcut paste: saves", any(r["title"] == "Miso-Glazed Salmon" and r["source"].endswith("miso-salmon") for r in (await stored(pg))["recipes"]))
+    await ev(pg, "ACTIONS.pasteRecipe()")
+    await pg.locator('#paste').fill(json.dumps({"zendom": 1, "url": "https://x.example.com/", "recipe": [{"@type": "WebPage"}]})); await pg.locator('[data-act=fillFromPaste]').click(); await pg.wait_for_timeout(100)
+    check("shortcut paste: a page with no recipe is explained", "didn't have a recipe" in await ev(pg, "document.querySelector('#pasteStatus').textContent"))
+    await ev(pg, "closeSheet(); ACTIONS.pasteRecipe()")
+    await pg.locator('#paste').fill("Lemon Pasta\n\nIngredients\n1 lb spaghetti\n2 lemons\n\nSteps\nBoil the pasta.\nToss with lemon."); await pg.locator('[data-act=fillFromPaste]').click(); await pg.wait_for_timeout(100)
+    check("shortcut paste: plain page text still goes through the text sorter", "2 lemons" in await ev(pg, "document.querySelector('#ings').value"))
+    check("shortcut paste: no page errors", not pg.errors, "; ".join(pg.errors))
+    await pg.context.close()
+
+
 async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch()
@@ -1012,6 +1036,7 @@ async def main():
         await test_smart(browser)
         await test_qol(browser)
         await test_links(browser)
+        await test_shortcut_paste(browser)
         await browser.close()
     failed = [r for r in results if not r[1]]
     print(f"\n{len(results) - len(failed)} of {len(results)} checks passed")
