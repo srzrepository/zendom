@@ -173,6 +173,23 @@ async def main():
             got = await ev(X, f"state.notes.find(n => n.id === '{nid2}').replies.map(r => r.id).join()")
             check(f"offline: back online, both replies end up on {nm}'s phone", got == "rb,rc,rd,re", got)
         check("offline: the Offline bar goes away", await ev(B, "document.querySelector('#netPill').hidden"))
+        # a save that is slow to finish while the other phone changes the same note (the race fixed in step 22)
+        await ev(A, "state.notes.push({id:'n-race', text:'race', color:'mint', pinned:false, author:'sam', created:1, updated:1, reactions:[], replies:[{id:'x1', by:'sam', text:'old', at:1}]}); save()")
+        await settle(A, B, ms=2400)
+        await ev(A, "window.__origWM = zdBackend.writeMerged; zdBackend.writeMerged = async function(l, m){ const r = await window.__origWM.call(this, l, m); await new Promise(res => setTimeout(res, 1200)); return r; }; 0")
+        await ev(A, "state.notes.find(n => n.id === 'n-race').replies.push({id:'ya', by:'sam', text:'slow save', at:2}); save()")
+        await A.wait_for_timeout(700)                                     # A's save is on the server but hasn't finished on A
+        await ev(B, "(n => { n.replies = n.replies.filter(r => r.id !== 'x1'); })(state.notes.find(n => n.id === 'n-race')); save()")
+        await settle(A, B, ms=3000)
+        await ev(A, "zdBackend.writeMerged = window.__origWM; 0")
+        await ev(A, "state.notes.find(n => n.id === 'n-race').replies.push({id:'yb', by:'sam', text:'later', at:3}); save()")
+        await settle(A, B, ms=2400)
+        srvr = [r["id"] for r in json.loads(srv.recs["note~n-race"]["j"])["replies"]]
+        for X, nm in ((A, "Sam"), (B, "Charlie")):
+            got = await ev(X, "state.notes.find(n => n.id === 'n-race').replies.map(r => r.id).join()")
+            check(f"slow save + a deletion from the other phone: the deleted reply stays deleted ({nm})", got == "ya,yb", got)
+        check("slow save: the server agrees", srvr == ["ya", "yb"], json.dumps(srvr))
+
         # status on one phone + profile edit on the other (same person record)
         await ev(A, "state.people.sam.status = {face:'grin', emoji:'', text:'hi', at:7}; save()")
         await ev(B, "state.people.sam.notes = 'likes spicy food'; save()")

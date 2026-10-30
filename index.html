@@ -5017,7 +5017,7 @@ function emptyHousehold(){
   d.budget.categories = []; d.budget.txns = []; d.budget.bills = []; d.budget.plan = {}; d.budget.fund.goals = []; d.budget.fund.entries = [];
   return d;
 }
-const sync = {status:"off", user:null, err:"", last:{}, ever:false, unsub:null, timer:0, at:0, pending:0, offline:false, retry:0};
+const sync = {status:"off", user:null, err:"", last:{}, ever:false, unsub:null, timer:0, at:0, pending:0, offline:false, retry:0, rseq:{}};
 const BASE_KEY = "zendom:base";                       // this phone only: last version of each record sent/received
 function syncLoad(){ try { const o = JSON.parse(lsGet(SYNC_KEY) || "{}"); sync.last = (o.last && typeof o.last === "object") ? o.last : {}; sync.ever = !!o.ever; } catch(e){}
   try { const b = JSON.parse(lsGet(BASE_KEY) || "null"); if(b && typeof b === "object") sync.base = b; } catch(e){} }
@@ -5081,15 +5081,19 @@ function syncFlush(){
   for(const k in cur){ const j = JSON.stringify(cur[k]), h = syncHash(j); if(sync.last[k] !== h){ writes.push({id:k, data:{del:false, j, t:Date.now(), by}}); sync.last[k] = h; } }
   for(const k in sync.last){ if(!(k in cur) && sync.last[k] !== null){ writes.push({id:k, data:{del:true, j:"", t:Date.now(), by}}); sync.last[k] = null; } }
   if(!writes.length) return 0;
-  const base0 = {}; writes.forEach(w => { base0[w.id] = sync.shadow ? sync.shadow[w.id] : undefined; });   // before notifyCollect moves it on
+  const base0 = {}, seq0 = {}; writes.forEach(w => { base0[w.id] = sync.shadow ? sync.shadow[w.id] : undefined; seq0[w.id] = sync.rseq[w.id] || 0; });   // before notifyCollect moves it on
   if(typeof notifyCollect === "function") notifyCollect(writes, cur);
   syncStore(); sync.pending++;
   if(sync.shadow) writes.forEach(w => { if(base0[w.id] !== undefined) sync.shadow[w.id] = base0[w.id]; else delete sync.shadow[w.id]; });   // merge against what we had before this send
   const send = be.writeMerged ? be.writeMerged(writes, mergeWrite) : be.write(writes).then(() => writes.map(w => ({id:w.id, data:w.data})));
   send.then(res => {
     sync.pending--; sync.at = Date.now(); syncOffline(false);
-    const merged = (res || []).filter(x => x.data && x.data.merged);
-    (res || []).forEach(x => { if(!sync.shadow) return; if(x.data.del) delete sync.shadow[x.id]; else sync.shadow[x.id] = x.data.j; });
+    // a newer version of a record arrived while this save was in flight: keep what arrived, re-check it on the next save
+    const raced = new Set((res || []).filter(x => (sync.rseq[x.id] || 0) !== seq0[x.id]).map(x => x.id));
+    raced.forEach(id => { delete sync.last[id]; });
+    const merged = (res || []).filter(x => x.data && x.data.merged && !raced.has(x.id));
+    (res || []).forEach(x => { if(!sync.shadow || raced.has(x.id)) return; if(x.data.del) delete sync.shadow[x.id]; else sync.shadow[x.id] = x.data.j; });
+    if(raced.size) syncSchedule();
     if(merged.length){                                                   // show the combined version here too
       merged.forEach(x => { try { applyRecord(state, x.id, JSON.parse(x.data.j)); } catch(e){} });
       state = keepIdentity(state, normalize(state), new Set(merged.map(x => x.id)));
@@ -5127,7 +5131,7 @@ function syncRemote(changes){
     const unsent = lastH === undefined ? localH !== undefined : (localH === undefined ? null : localH) !== lastH;
     if(unsent) return;                                                  // this phone's newer edit wins and is about to be sent
     let data = null; if(!c.del){ try { data = JSON.parse(c.j); } catch(e){ return; } }
-    applyRecord(state, c.id, data); applied.push(c.id);
+    applyRecord(state, c.id, data); applied.push(c.id); sync.rseq[c.id] = (sync.rseq[c.id] || 0) + 1;
   });
   if(!applied.length) return;
   state = keepIdentity(state, normalize(state), new Set(applied));
