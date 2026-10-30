@@ -1465,6 +1465,28 @@ async def test_paybacks(browser):
     await pg.context.close()
 
 
+async def test_keyboard_sheet(browser):
+    pg = await new_page(browser, clock="2026-10-30T13:00:00-07:00")
+    await ev(pg, """(() => { state.budget.txns = [{id:'e1', kind:'expense', amount:2318, date:'2026-10-12', categoryId:null, paidBy:'sam', shared:false, note:'Cinemark', billId:null},
+        {id:'p1', kind:'income', amount:1159, date:'2026-10-13', categoryId:null, paidBy:'sam', shared:false, note:'Jesus (movie ticket)', billId:null, repays:'e1'}];
+      save(); ACTIONS.tab('budget'); ACTIONS.editTxn('p1'); })()""")
+    check("keyboard: the page behind is locked while a sheet is open", await ev(pg, "document.documentElement.classList.contains('sheet-open') && getComputedStyle(document.body).overflow === 'hidden'"))
+    # pretend the keyboard took the bottom 340px and Safari slid the view down 120px
+    await ev(pg, "document.querySelector('#tdetails').focus({preventScroll:true})")
+    r = await ev(pg, """(() => { const kb = fitSheet({height: 504, offsetTop: 120}, 844); const sh = document.querySelector('.sheet'), b = sh.getBoundingClientRect(), a = document.activeElement.getBoundingClientRect();
+        return {kb, top: sh.style.top, max: sh.style.maxHeight, inView: a.top >= b.top && a.bottom <= b.bottom}; })()""")
+    check("keyboard: the sheet fits the visible part of the screen", r["kb"] and r["top"] == "128px" and r["max"] == "496px", str(r))
+    check("keyboard: the box you tapped is scrolled into view in the sheet", r["inView"], str(r))
+    r = await ev(pg, "(() => { const kb = fitSheet({height: 800, offsetTop: 0}, 844); const sh = document.querySelector('.sheet'); return [kb, sh.style.top, sh.style.bottom, sh.style.maxHeight].join('|'); })()")
+    check("keyboard: closing the keyboard (or a small address-bar change) puts the sheet back", r == "false|||", r)
+    await ev(pg, "closeSheet()")
+    check("keyboard: closing the sheet unlocks the page", await ev(pg, "!document.documentElement.classList.contains('sheet-open') && getComputedStyle(document.body).overflow !== 'hidden'"))
+    await act(pg, "newTxn"); await ev(pg, "document.querySelector('.backdrop').click()")
+    check("keyboard: tapping outside the sheet also unlocks the page", await ev(pg, "!document.documentElement.classList.contains('sheet-open')"))
+    check("keyboard: no page errors", not pg.errors, "; ".join(pg.errors))
+    await pg.context.close()
+
+
 async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch()
@@ -1488,6 +1510,7 @@ async def main():
         await test_splits(browser)
         await test_payment_memo(browser)
         await test_paybacks(browser)
+        await test_keyboard_sheet(browser)
         await browser.close()
     failed = [r for r in results if not r[1]]
     print(f"\n{len(results) - len(failed)} of {len(results)} checks passed")

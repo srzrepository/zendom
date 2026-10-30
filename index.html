@@ -213,6 +213,8 @@ button{cursor:pointer}
 .sheet{position:fixed;left:0;right:0;bottom:0;z-index:21;background:var(--surface);border-radius:26px 26px 0 0;max-height:88vh;overflow:auto;
   padding:8px max(18px,env(safe-area-inset-right,0px)) calc(20px + env(safe-area-inset-bottom,0px)) max(18px,env(safe-area-inset-left,0px));box-shadow:0 -10px 30px rgba(0,0,0,.18)}
 .sheet .in{max-width:520px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+html.sheet-open,html.sheet-open body{overflow:hidden}
+.sheet{overscroll-behavior:contain}
 .grab{width:44px;height:5px;border-radius:9px;background:var(--line);margin:4px auto 2px}
 .sheet h2{font-size:1.3rem}
 .field{display:flex;flex-direction:column;gap:5px}
@@ -4887,12 +4889,36 @@ function openSheet(title, inner, onSubmit, autofocus = true){
     <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle"><form class="in" id="sheetForm" novalidate>
       <div class="grab" aria-hidden="true"></div><h2 id="sheetTitle">${esc(title)}</h2>${inner}</form></div>`;
   const form = $("#sheetForm");
+  document.documentElement.classList.add("sheet-open");
+  if(window.visualViewport) fitSheet(window.visualViewport, Math.max(sheetFullH, window.innerHeight));
   form.addEventListener("submit", e => { e.preventDefault(); clearErrors(form); onSubmit(form); });
   const first = form.querySelector("input:not([type=radio]):not([type=hidden]),select,textarea");
   if(first && autofocus) setTimeout(() => first.focus({preventScroll:true}), 30);
   hydratePhotos();
 }
-function closeSheet(){ discardPendingPdf(); $("#sheetRoot").innerHTML = ""; if(lastFocus && document.contains(lastFocus)) lastFocus.focus({preventScroll:true}); }
+// iPhone keyboard: fit the open sheet to what's visible instead of letting Safari slide the page.
+// vv: {height, offsetTop}; fullH: the page's height without the keyboard.
+function fitSheet(vv, fullH){
+  const sh = document.querySelector(".sheet"); if(!sh || !vv) return false;
+  const kb = fullH - vv.height > 120;          // a real keyboard, not the address bar shrinking
+  if(kb){ sh.style.top = Math.round(vv.offsetTop + 8) + "px"; sh.style.bottom = "auto"; sh.style.maxHeight = Math.round(vv.height - 8) + "px"; }
+  else { sh.style.top = ""; sh.style.bottom = ""; sh.style.maxHeight = ""; }
+  const a = document.activeElement;
+  if(kb && a && sh.contains(a) && a.matches && a.matches(TYPING_SEL)){
+    const r = a.getBoundingClientRect(), box = sh.getBoundingClientRect();
+    if(r.top < box.top + 8 || r.bottom > box.bottom - 8) sh.scrollTop += r.top - box.top - Math.max(8, (box.height - r.height) / 3);
+  }
+  return kb;
+}
+let sheetFullH = window.innerHeight;
+if(window.visualViewport){
+  const onVV = () => { if(!document.querySelector(".sheet")){ sheetFullH = window.innerHeight; return; }
+    sheetFullH = Math.max(sheetFullH, window.innerHeight); fitSheet(window.visualViewport, sheetFullH); };
+  window.visualViewport.addEventListener("resize", onVV);
+  window.visualViewport.addEventListener("scroll", onVV);
+  window.addEventListener("orientationchange", () => { sheetFullH = 0; setTimeout(onVV, 300); });
+}
+function closeSheet(){ discardPendingPdf(); $("#sheetRoot").innerHTML = ""; document.documentElement.classList.remove("sheet-open"); if(lastFocus && document.contains(lastFocus)) lastFocus.focus({preventScroll:true}); }
 function field(id, label, input, hint){ return `<div class="field" id="f-${id}"><label for="${id}">${label}</label>${input}${hint?`<span class="hint">${hint}</span>`:""}</div>`; }
 function clearErrors(form){ form.querySelectorAll(".field.bad").forEach(f => { f.classList.remove("bad"); const e = f.querySelector(".err"); if(e) e.remove(); }); }
 function fail(id, msg){ const f = $("#f-"+id); if(!f) return; f.classList.add("bad"); f.insertAdjacentHTML("beforeend", `<span class="err" role="alert">${esc(msg)}</span>`); const i = f.querySelector("input,select,textarea"); if(i) i.focus(); }
@@ -5246,7 +5272,7 @@ function toast(msg, undo, label, ms){
   toastTimer = setTimeout(() => { $("#toastRoot").innerHTML = ""; toast.undo = null; }, ms || (undo ? 5000 : 2200));
 }
 /* ---- which version is this, and is there a newer one? ---- */
-const BUILD = "2026-10-30 · 32";
+const BUILD = "2026-10-30 · 33";
 let updateSeen = "";
 async function checkForUpdate(){
   if(!/^https?:$/.test(location.protocol) || navigator.onLine === false) return;
