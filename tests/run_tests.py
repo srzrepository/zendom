@@ -1209,6 +1209,43 @@ async def test_person_view(browser):
     await pg.context.close()
 
 
+async def test_pdf_statements(browser):
+    import os
+    V = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendor") + "/"; F = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures") + "/"
+    pg = await new_page(browser, clock="2026-10-30T10:00:00-07:00")
+    await pg.context.route("**/pdf.js/3.11.174/pdf.min.js", lambda r: r.fulfill(path=V + "pdf.min.js", content_type="application/javascript"))
+    await pg.context.route("**/pdf.js/3.11.174/pdf.worker.min.js", lambda r: r.fulfill(path=V + "pdf.worker.min.js", content_type="application/javascript"))
+    await ev(pg, """(() => { state.budget.categories = [{id:'g', name:'Groceries', limit:60000}]; state.budget.txns = [
+        {id:'m1', kind:'expense', amount:18450, date:'2026-10-03', categoryId:'g', paidBy:'sam', shared:true, note:"Trader Joe's", billId:null}];
+      save(); ACTIONS.tab('budget'); ACTIONS.btab('spending'); ACTIONS.importCsv(); })()""")
+    check("pdf import: the picker takes PDFs", "pdf" in await ev(pg, "document.querySelector('#csvFile').accept"))
+    await pg.locator('#csvFile').set_input_files(F + "card_oct.pdf"); await pg.wait_for_timeout(1500)
+    rows = await ev(pg, "imp && imp.rows.map(x => [x.desc, x.cents, x.include, x.dup])")
+    check("pdf import: a card statement opens the preview", rows and len(rows) == 5, json.dumps(rows))
+    by = {r[0]: r for r in rows or []}
+    check("pdf import: purchases are money out", by.get("BLUE BOTTLE COFFEE", [0, 0])[1] == -675 and by["AMAZON MKTPLACE PMTS"][1] == -6499)
+    check("pdf import: the return is money in", by["AMAZON MKTPLACE RETURN"][1] == 6499)
+    check("pdf import: the card payment starts unticked as a transfer", by["AUTOPAY PAYMENT - THANK YOU"][2] is False and "transfer" in by["AUTOPAY PAYMENT - THANK YOU"][3])
+    check("pdf import: the duplicate check still works", by["TRADER JOE'S #123 SAN JOSE CA"][2] is False and "Trader Joe" in by["TRADER JOE'S #123 SAN JOSE CA"][3])
+    check("pdf import: the preview says it came from a PDF", "PDF card statement" in await ev(pg, "document.querySelector('#sheetForm').innerText"))
+    await submit(pg)
+    tx = (await stored(pg))["budget"]["txns"]
+    check("pdf import: ticked rows import (coffee, Amazon, return)", len(tx) == 4 and sorted(t["note"] for t in tx if t.get("imp")) == ["AMAZON MKTPLACE PMTS", "AMAZON MKTPLACE RETURN", "BLUE BOTTLE COFFEE"], json.dumps([t["note"] for t in tx]))
+    check("pdf import: the return comes in as income-side money", [t["kind"] for t in tx if t["note"] == "AMAZON MKTPLACE RETURN"] == ["income"])
+    # checking statement with Withdrawals / Deposits / Balance columns
+    r = await pg.evaluate("async b => { const bin = atob(b), u = new Uint8Array(bin.length); for(let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return statementRows(await pdfLines(u.buffer)); }", __import__("base64").b64encode(open(F + "checking.pdf", "rb").read()).decode())
+    got = [(x["date"], x["desc"], x["cents"]) for x in r["rows"]]
+    check("pdf import: bank columns decide money in/out; balances skipped", got == [("2026-09-18", "PG&E UTILITY BILL", -8420), ("2026-10-01", "PAYROLL DIRECT DEP EXAMPLE CO", 220181), ("2026-10-02", "ONLINE TRANSFER TO SAVINGS", -50000), ("2026-10-05", "EXAMPLE CARD AUTOPAY PAYMENT", -35000), ("2026-10-09", "FARMERS MARKET", -2350)], json.dumps(got))
+    r = await pg.evaluate("async b => { const bin = atob(b), u = new Uint8Array(bin.length); for(let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return statementRows(await pdfLines(u.buffer)); }", __import__("base64").b64encode(open(F + "card_jan.pdf", "rb").read()).decode())
+    check("pdf import: a December line on a January statement gets last year", [x["date"] for x in r["rows"]] == ["2026-12-20", "2027-01-05"], json.dumps(r["rows"]))
+    # not a statement / not a PDF
+    await ev(pg, "ACTIONS.importCsv()")
+    await pg.locator('#csvFile').set_input_files(files=[{"name": "fake.pdf", "mimeType": "application/pdf", "buffer": b"hello"}]); await pg.wait_for_timeout(300)
+    check("pdf import: a file that isn't a PDF is explained", "isn't a PDF" in await ev(pg, "document.querySelector('#toastRoot').innerText"))
+    check("pdf import: no page errors", not pg.errors, "; ".join(pg.errors))
+    await pg.context.close()
+
+
 async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch()
@@ -1228,6 +1265,7 @@ async def main():
         await test_dinner_suggestions(browser)
         await test_entries_import(browser)
         await test_person_view(browser)
+        await test_pdf_statements(browser)
         await browser.close()
     failed = [r for r in results if not r[1]]
     print(f"\n{len(results) - len(failed)} of {len(results)} checks passed")
