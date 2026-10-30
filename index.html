@@ -449,6 +449,7 @@ a.btn{text-decoration:none}
 .pdfpages img{width:100%;border-radius:10px;box-shadow:var(--shadow);background:#fff}
 
 /* calendar */
+.t-pay{--tc:#3f9a6b}
 :root{--t-chore:#2f9c8f;--t-meal:#e08a3c;--t-bill:#6f7d92;--t-health:#4f86d6;--t-bday:#e8559a;--t-event:#8b6fd1;--t-pantry:#5c9e4a;--t-holiday:#c9a227}
 .t-chore{--tc:var(--t-chore)} .t-meal{--tc:var(--t-meal)} .t-bill{--tc:var(--t-bill)} .t-health{--tc:var(--t-health)} .t-bday{--tc:var(--t-bday)} .t-event{--tc:var(--t-event)} .t-pantry{--tc:var(--t-pantry)} .t-holiday{--tc:var(--t-holiday)}
 .calitem.t-holiday .ct{font-weight:700}
@@ -2773,7 +2774,7 @@ function initKitchenInputs(){
 const PIG = {"pal": {"P": "#f6b3c1", "p": "#e2899c", "d": "#9e4258", "N": "#f28ea4", "E": "#2b1d22", "W": "#ffffff", "B": "#f48aa2", "V": "#3f9a6b", "v": "#2b6f4d", "G": "#5a4636", "C": "#5f6b7a", "c": "#bfe8c8", "K": "#eef1f4", "O": "#f0a04b", "S": "#fbf7f2", "T": "#3f6fb5", "h": "#c9677e"}, "rows": ["................................", "................................", "........pp............pp........", "........pPp..........pPp........", "........pPPp........pPPp........", "........pPPPPPPPPPPPPPPp........", ".......vVVVVVVVVVVVVVVVVv.......", ".....vVVVVVVVVVVVVVVVVVVVVv.....", ".....vvvvvvvvvvvvvvvvvvvvvv.....", ".......PPPPPPPPPPPPPPPPPP.......", "......PPPGGGGPPPPPPGGGGPPP......", "......PPPGEWGGGGGGGGEWGPPP......", "......PPPGEEGPPPPPPGEEGPPP......", "......PPBGGGGNNNNNNGGGGBPP......", "......PPBBPNNdNNNNdNNPBBPP......", "......PPPPPNNdNNNNdNNPPPPP......", "......pPPPPPNNNNNNNNPPPPPp......", ".......pPPPPPPPddPPPPPPPp.......", "......PPPPPPPSSTTSSPPPPPPP......", ".....PPPPPPPPSSTTSSPPPPPPPP.....", "....PPPPPPhhCCCCCCCChhPPPPPP....", "....PPPPPPhhCccccccChhPPPPPP....", "....PPPPPPPPCccccccCPPPPPPPP....", "....PPPPPPPPCCCCCCCCPPPPPPPP....", "...PPPPPPPPPCKCKCKCCPPPPPPPPP...", "...PPPPPPPPPCCCCCCCCPPPPPPPPP...", "...PPPPPPPPPCKCKCKOCPPPPPPPPP...", "..PPPPPPPPPPCCCCCCCCPPPPPPPPPP..", "..pPPPPPPPPPPPPPPPPPPPPPPPPPPp..", ".pPPPPPPPPPPPPPPPPPPPPPPPPPPPPp.", "..hhhhPPPPPPPPPPPPPPPPPPPPhhhh..", "..hhhh....................hhhh.."]};
 const BILL_CYCLES = {weekly:"Every week", monthly:"Every month", yearly:"Every year"};
 const DEFAULT_BUDGET_CATS = ["Groceries","Dining out","Household","Paprika","Transport","Fun","Health","Bills & subscriptions","Rent & utilities","Other"];
-function defaultBudget(){ return { pigName:"Jeff", venmo:{sam:"", charlie:""}, plan:{}, fund: normalizeFund({}), categories: DEFAULT_BUDGET_CATS.map(n => ({id:uid(), name:n, limit:0})), txns:[], bills:[] }; }
+function defaultBudget(){ return { pigName:"Jeff", venmo:{sam:"", charlie:""}, plan:{}, fund: normalizeFund({}), categories: DEFAULT_BUDGET_CATS.map(n => ({id:uid(), name:n, limit:0})), txns:[], bills:[], paydays:[] }; }
 const JEFF_JAR = {"pal":{"P":"#f6b3c1","p":"#e2899c","d":"#9e4258","N":"#f28ea4","E":"#2b1d22","W":"#ffffff","B":"#f48aa2","V":"#3f9a6b","v":"#2b6f4d","G":"#5a4636","C":"#5f6b7a","c":"#bfe8c8","K":"#eef1f4","O":"#f0a04b","S":"#fbf7f2","T":"#3f6fb5","h":"#c9677e","L":"#7a4a2c","l":"#b07646","g":"#4f8597","a":"#e7f6f9","A":"#cbe9f0","Y":"#f5c94f","y":"#b9811f","o":"#8a5a14","m":"#86c47f","M":"#4c8a48","H":"#e8607f","w":"#ffffff","k":"#e2899c"},"rows":["................................","................................","........pp............pp........","........pPp..........pPp........","........pPPp........pPPp........","........pPPPPPPPPPPPPPPp........",".......vVVVVVVVVVVVVVVVVv.......",".....vVVVVVVVVVVVVVVVVVVVVv.....",".....vvvvvvvvvvvvvvvvvvvvvv.....",".......PPPPPPPPPPPPPPPPPP.......","......PPPGGGGPPPPPPGGGGPPP......","......PPPGEWGGGGGGGGEWGPPP......","......PPPGEEGPPPPPPGEEGPPP......","......PPBGGGGNNNNNNGGGGBPP......","......PPBBPNNdNNNNdNNPBBPP......","......PPPPPNNdNNNNdNNPPPPP......","......pPPPPPNNNNNNNNPPPPPp......",".......pPPPPPPPddPPPPPPPp.......","......PPPPPPPPPPPPPPPPPPPP......",".....PPPPPLLLLLLLLLLLLPPPPP.....","....PPPPPPllllllllllllPPPPPP....","....PPPPPPgaaaaaaaaaagPPPPPP....","....PPPPPPgwaaaaaaaaagPPPPPP....","....PPPPkkgwaaamMaaaagkkPPPP....","...PPPPPkkgaaamMMmaaagkkPPPPP...","...PPPPPPPgaYYoaMaYYogPPPPPPP...","...PPPPPPPgYyYaYYoYyYgPPPPPPP...","..PPPPPPPPgYYoYYyYYYogPPPPPPPP..","..pPPPPPPPgYyYYoYYYoYgPPPPPPPp..",".pPPPPPPPPggggggggggggPPPPPPPPp.","..hhhhPPPPPPPPPPPPPPPPPPPPhhhh..","..hhhh....................hhhh.."]};   // Jeff hugging the Fun Fund jar
 function pigSvg(cls, sp){ sp = sp || PIG; return `<svg class="pixel ${cls||""}" viewBox="0 0 32 32" width="100%" height="100%" aria-hidden="true">${spriteRects(sp.rows, sp.pal)}</svg>`; }
 const usd = new Intl.NumberFormat("en-US", {style:"currency", currency:"USD"});
@@ -2791,6 +2792,38 @@ const curMonth = () => budgetMonth || (budgetMonth = todayStr().slice(0, 7));
 function addMonthKey(k, n){ const [y, m] = k.split("-").map(Number); const d = new Date(y, m - 1 + n, 1); return `${d.getFullYear()}-${pad(d.getMonth()+1)}`; }
 const monthName = k => { const [y, m] = k.split("-").map(Number); return new Date(y, m - 1, 1).toLocaleDateString(undefined, {month:"long", year:"numeric"}); };
 const catName = id => { const c = state.budget.categories.find(x => x.id === id); return c ? c.name : "Uncategorized"; };
+/* ---- Paydays: income you're expecting ----
+   p.next is the payday as scheduled. With weekend:true, a Saturday or Sunday payday comes the Friday before. */
+const PAY_CYCLES = {weekly:"Every week", biweekly:"Every 2 weeks", semimonthly:"Twice a month", monthly:"Once a month"};
+const dayLabel = d => d >= 31 ? "last day" : d + (d % 10 === 1 && d !== 11 ? "st" : d % 10 === 2 && d !== 12 ? "nd" : d % 10 === 3 && d !== 13 ? "rd" : "th");
+function payCycleLabel(p){ return p.cycle === "semimonthly" ? `The ${dayLabel(p.days[0])} and ${dayLabel(p.days[1])}` : p.cycle === "monthly" ? `The ${dayLabel(p.days[0])} of each month` : PAY_CYCLES[p.cycle]; }
+// The first scheduled payday on or after `from` (by days of the month), or the next one after it (strict)
+function payByDays(days, from, strict){
+  const out = [];
+  for(let k = 0; k < 3; k++){ const mk = addMonths(from.slice(0, 8) + "01", k); days.forEach(d => out.push(withDay(mk, d))); }
+  return out.filter(x => strict ? x > from : x >= from).sort()[0];
+}
+function payAfter(p, d){
+  if(p.cycle === "weekly") return addDays(d, 7);
+  if(p.cycle === "biweekly") return addDays(d, 14);
+  return payByDays(p.days, d, true);
+}
+function payActual(p, d){ if(!p.weekend) return d; const w = parse(d).getDay(); return w === 6 ? addDays(d, -1) : w === 0 ? addDays(d, -2) : d; }
+// Paydays whose money lands between from and to, starting at the next one not logged yet: [{sched, date}]
+function payDates(p, from, to){
+  const out = []; let d = p.next;
+  for(let i = 0; i < 400; i++){ const a = payActual(p, d); if(a > to) break; if(a >= from) out.push({sched: d, date: a}); d = payAfter(p, d); }
+  return out;
+}
+// What's still expected between from and to (only paydays not logged yet), optionally for one person
+const expectedPay = (from, to, who) => state.budget.paydays.filter(p => !who || p.who === who).reduce((a, p) => a + payDates(p, from, to).length * p.amount, 0);
+function payInfo(p){
+  const a = payActual(p, p.next), n = diffDays(todayStr(), a);
+  if(n < 0) return {cls:"soon", text:"Did it come in?", n, date:a};
+  if(n === 0) return {cls:"today", text:"Payday today", n, date:a};
+  if(n === 1) return {cls:"ok", text:"Tomorrow", n, date:a};
+  return {cls:"", text: n <= 6 ? `In ${n} days` : niceDate(a), n, date:a};
+}
 function nextBillDate(b){ return nthRepeat(b.nextDue, b.cycle, 0, 1, b.anchorDay || +b.nextDue.slice(8)); }
 const billMonthly = b => b.cycle === "weekly" ? Math.round(b.amount * 52 / 12) : b.cycle === "yearly" ? Math.round(b.amount / 12) : b.amount;
 function billInfo(b){
@@ -3083,6 +3116,9 @@ function viewBudget(){
   const isNow = k === todayStr().slice(0, 7);
   const bills = state.budget.bills.slice().sort((a, b) => a.nextDue.localeCompare(b.nextDue));
   const billTotal = bills.reduce((a, b) => a + billMonthly(b), 0);
+  const pays = state.budget.paydays.filter(p => !who || p.who === who).slice().sort((a, b) => payActual(a, a.next).localeCompare(payActual(b, b.next)));
+  const mEnd = toStr(new Date(+k.slice(0, 4), +k.slice(5, 7), 0)), mFrom = k < todayStr().slice(0, 7) ? null : `${k}-01`;
+  const expect = mFrom ? expectedPay(mFrom, mEnd, who) : 0;
   const listTx = st.tx.filter(t => !t.linked || t.linked.date.slice(0, 7) !== k);   // paybacks sit under their expense; from another month they show here, not counted
   const days = [...new Set(listTx.map(t => t.date))].sort().reverse();
   const hasShared = state.budget.txns.some(t => t.shared || t.kind === "settle");
@@ -3100,7 +3136,7 @@ function viewBudget(){
   <div class="seg" role="group" aria-label="Whose spending">${[["", "Both of us"], ...HUMANS.map(h => [h, nameOf(h)])].map(([id, l]) => `<button type="button" class="chip" data-act="spendWho" data-id="${id}" aria-pressed="${who === id}">${esc(l)}</button>`).join("")}</div>
   <div class="stats">
     <div class="stat"><span class="label">${who ? `${esc(nameOf(who))}'s share` : "Spent"}</span><b>${money(st.spent)}</b>${who ? `<span class="small muted">${money(ps.paid)} paid by ${esc(nameOf(who))}</span>` : st.budgeted ? `<span class="small muted">of ${money(st.budgeted)} budgeted</span>` : ""}</div>
-    <div class="stat"><span class="label">${who ? `${esc(nameOf(who))}'s income` : "Income"}</span><b>${money(st.income)}</b><span class="small muted">${st.income ? `${money(Math.abs(st.income - st.spent))} ${st.income >= st.spent ? "after spending" : "short"}` : "None logged"}</span></div>
+    <div class="stat"><span class="label">${who ? `${esc(nameOf(who))}'s income` : "Income"}</span><b>${money(st.income)}</b><span class="small muted">${st.income ? `${money(Math.abs(st.income - st.spent))} ${st.income >= st.spent ? "after spending" : "short"}` : "None logged"}</span>${expect ? `<span class="small muted expect">+ ${money(expect)} expected by ${esc(niceDate(mEnd))}</span>` : ""}</div>
   </div>
   ${paybackHintHTML()}
   ${hasShared ? `<section class="card settle"><div><span class="label">Shared spending</span>
@@ -3116,6 +3152,13 @@ function viewBudget(){
         <span class="cv">${money(sp)}${L ? ` <span class="muted">/ ${money(L)}</span>` : ""}</span>
         ${L ? `<span class="cbar ${over ? "over" : pct >= 85 ? "near" : ""}"><i style="width:${pct}%"></i></span>${over ? `<span class="pill late">${money(sp - L)} over</span>` : ""}` : who ? "" : `<span class="small muted cnone">Nothing assigned</span>`}</button>`; }).join("")}
       ${st.byCat.none ? `<div class="catrow"><span class="cn">Uncategorized</span><span class="cv">${money(st.byCat.none)}</span></div>` : ""}</div>
+  </section>
+
+  <section class="sec"><div class="sec-head"><span class="label">Paychecks${pays.length ? ` · ${money(pays.reduce((a, p) => a + payMonthly(p), 0))}/mo` : ""}</span><button type="button" class="link" data-act="editPayday">+ Add</button></div>
+    ${pays.length ? `<div class="list">${pays.map(p => { const i = payInfo(p); return `<div class="billrow"><button type="button" class="item" data-act="editPayday" data-id="${p.id}"><div><div class="t">${esc(p.name)}</div>
+        <div class="s">${money(p.amount)} · ${esc(payCycleLabel(p))} · ${esc(nameOf(p.who))}</div></div><span class="pill ${i.cls}">${esc(i.text)}</span></button>
+        ${i.n <= 2 ? `<button type="button" class="btn ghost small" data-act="gotPay" data-id="${p.id}" aria-label="Got ${esc(p.name)}">Got it</button>` : ""}</div>`; }).join("")}</div>`
+      : `<div class="empty"><p>${who ? `No paychecks for ${esc(nameOf(who))} yet.` : "Add your paychecks to see what's still coming in this month."}</p></div>`}
   </section>
 
   <section class="sec"><div class="sec-head"><span class="label">Bills &amp; subscriptions${bills.length ? ` · ${money(billTotal)}/mo` : ""}</span><button type="button" class="link" data-act="editBill">+ Add</button></div>
@@ -3172,17 +3215,21 @@ function paybackPicker(d){
   if(cur && !list.some(c => c.t.id === cur.id)) list.unshift({t: cur, left: cur.amount - repaidSoFar(cur.id, d.id), hit: false});
   const opt = c => `<option value="${c.t.id}" ${d.repays === c.t.id ? "selected" : ""}>${c.hit ? "★ " : ""}${esc(cutText(expLabel(c.t), 28))} · ${esc(niceDate(c.t.date))} · ${money(c.left)} left</option>`;
   return field("trepays", "Pays back an expense?", `<select id="trepays" name="trepays"><option value="">No, it's regular income</option>${list.map(opt).join("")}</select>`,
-    list.length ? `If a friend paid you back, pick what it was for. It lowers that cost instead of counting as income.${list.some(c => c.hit) ? " ★ = mentions the same name or words." : ""}` : "No recent spending to pair it with.");
+    list.length ? `If a friend paid you back, pick what it was for. It lowers that cost instead of counting as income. Paying each other back? Use Record payment instead.${list.some(c => c.hit) ? " ★ = mentions the same name or words." : ""}` : "No recent spending to pair it with.");
 }
 // On an expense: its paybacks, and a button to add one
 function paybackBox(t){
   const pb = state.budget.txns.filter(r => r.kind === "income" && r.repays === t.id);
+  const nt = netTx().find(x => x.id === t.id) || t, ower = other(t.paidBy), share = t.shared && !t.cancelled ? Math.round(shareOf(nt, ower)) : 0;
+  const shareBtn = share ? `<div class="field" id="shareBox"><span class="lab">Split with ${esc(nameOf(other(prefs.user)))}</span>
+      <span class="hint">${esc(nameOf(ower))}'s part is ${money(share)}. When it's been paid back, record it here; that's a payment between you, and it clears what's owed.</span>
+      <button type="button" class="btn ghost small" data-act="payShare" data-id="${t.id}" style="align-self:flex-start;margin-top:4px">${ower === prefs.user ? `I paid ${esc(nameOf(t.paidBy))} my share (${money(share)})` : `${esc(nameOf(ower))} paid me ${ower === "sam" ? "her" : "his"} share (${money(share)})`}</button></div>` : "";
   const live = pb.filter(r => !r.cancelled).reduce((a, r) => a + r.amount, 0);
-  return `<div class="field" id="pbBox"><span class="lab">Paid back</span>
+  return shareBtn + `<div class="field" id="pbBox"><span class="lab">Paid back by someone else</span>
     ${pb.length ? `<div class="small">${pb.map(r => `${esc(r.note || "Paid back")} · ${money(r.amount)} · ${esc(niceDate(r.date))}${r.cancelled ? " (didn't come in)" : ""}`).join("<br>")}</div>
       <span class="hint">Counts as ${money(Math.max(0, t.amount - live))} after paybacks${t.shared ? ", and that's what you two split" : ""}. Tap a payback in the list to change it.</span>`
-      : `<span class="hint">If someone pays you back for this, add it here so it lowers the cost instead of counting as income.</span>`}
-    <button type="button" class="btn ghost small" data-act="addPayback" data-id="${t.id}" style="align-self:flex-start;margin-top:4px">+ Someone paid me back</button></div>`;
+      : `<span class="hint">If a friend (not ${esc(nameOf(other(prefs.user)))}) pays you back for this, add it here so it lowers the cost instead of counting as income.</span>`}
+    <button type="button" class="btn ghost small" data-act="addPayback" data-id="${t.id}" style="align-self:flex-start;margin-top:4px">+ A friend paid me back</button></div>`;
 }
 /* ---- forms ---- */
 function catOptions(sel){ return `<option value="">Uncategorized</option>` + state.budget.categories.map(c => `<option value="${c.id}" ${sel === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join(""); }
@@ -3237,7 +3284,7 @@ function txnForm(id, preset){
     <div class="field"><span class="lab">Who paid?</span>${whoRadios("paidBy", d.paidBy)}</div>
     <label class="chip" id="sharedBox" style="align-self:flex-start;cursor:pointer"><input type="checkbox" name="shared" ${d.shared?"checked":""} style="accent-color:var(--accent)"> Shared cost</label>
     ${splitPicker("t", d.split, d.amount)}
-    <div id="incOnly">${paybackPicker(d)}</div>
+    <div id="incOnly">${paybackPicker(d)}${t && t.repays && (state.budget.txns.find(x => x.id === t.repays) || {}).shared ? `<button type="button" class="btn ghost small" data-act="pbToSettle" data-id="${t.id}" style="align-self:flex-start;margin-top:6px">This was between ${esc(nameOf("sam"))} and ${esc(nameOf("charlie"))}: make it a payment</button>` : ""}</div>
     ${t && t.kind === "expense" ? paybackBox(t) : ""}
     ${field("tdetails","Details", `<textarea id="tdetails" name="tdetails" maxlength="500" rows="2" placeholder="What exactly you got, order number, why it was returned…">${esc(d.details || "")}</textarea>`, "Optional")}
     <label class="chip" style="align-self:flex-start;cursor:pointer"><input type="checkbox" name="tcancel" ${d.cancelled?"checked":""}> Cancelled or refunded (don't count it)</label>
@@ -3277,10 +3324,10 @@ function txnForm(id, preset){
   const sync = () => { const exp = (document.querySelector("input[name=kind]:checked") || {}).value !== "income"; $("#expOnly").hidden = !exp; $("#sharedBox").hidden = !exp; if(!exp) $("#f-tsplit").hidden = true; $("#incOnly").hidden = exp; if($("#pbBox")) $("#pbBox").hidden = !exp; };
   document.querySelectorAll("input[name=kind]").forEach(r => r.addEventListener("change", sync)); sync();
 }
-function settleForm(id){
+function settleForm(id, preset, replaces){
   const t = id ? state.budget.txns.find(x => x.id === id) : null;
   const bal = balance();
-  const d = t || {amount:Math.abs(bal), date:todayStr(), paidBy: bal > 0 ? "charlie" : "sam", note:settleMemo()};
+  const d = t || Object.assign({amount:Math.abs(bal), date:todayStr(), paidBy: bal > 0 ? "charlie" : "sam", note:settleMemo()}, preset || {});
   const payee = other(d.paidBy), vu = (state.budget.venmo || {})[payee];
   openSheet(t ? "Edit payment" : "Record a payment", `
     <p class="small" style="margin:0">${bal === 0 && !t ? "You're even right now." : `Right now ${bal > 0 ? "Charlie owes Sam" : "Sam owes Charlie"} ${money(Math.abs(bal))}.`}</p>
@@ -3298,6 +3345,7 @@ function settleForm(id){
     if(!HUMANS.includes(paidBy)) return fail("samt","Pick who paid.");
     const data = {kind:"settle", amount, date, paidBy, shared:false, categoryId:null, note: val(form, "smemo").slice(0, 80)};
     if(t) Object.assign(t, data); else state.budget.txns.push(Object.assign({id:uid(), billId:null}, data, settleForm.via ? {source:settleForm.via} : {}));
+    if(!t && replaces) removeBy(state.budget.txns, replaces);   // a payback that was really a payment between you
     settleForm.via = null;
     save(); closeSheet(); render(); toast("Payment recorded");
   });
@@ -3359,6 +3407,49 @@ function billForm(id){
   wireSplit("b", "bshared", "bamt");
 }
 
+// Rough monthly amount of a paycheck (for the list heading)
+const payMonthly = p => p.cycle === "weekly" ? Math.round(p.amount * 52 / 12) : p.cycle === "biweekly" ? Math.round(p.amount * 26 / 12) : p.cycle === "semimonthly" ? p.amount * 2 : p.amount;
+function dayOptions(sel){ return [...Array(30)].map((_, i) => `<option value="${i + 1}" ${sel === i + 1 ? "selected" : ""}>${dayLabel(i + 1)}</option>`).join("") + `<option value="31" ${sel >= 31 ? "selected" : ""}>Last day</option>`; }
+function paydayForm(id){
+  const p = id ? state.budget.paydays.find(x => x.id === id) : null; if(id && !p) return;
+  const d = p || {name:"Paycheck", amount:0, who:prefs.user, cycle:"biweekly", next:todayStr(), days:[15, 31], weekend:true};
+  const dd = d.cycle === "semimonthly" ? d.days : d.cycle === "monthly" ? [d.days[0], 31] : [15, 31];
+  openSheet(p ? "Edit paycheck" : "New paycheck", `
+    ${field("pname","Name", `<input id="pname" name="pname" maxlength="40" value="${esc(d.name)}" placeholder="Paycheck, Stanford, side gig…" autocomplete="off">`)}
+    ${field("pamt","Usual amount", `<input id="pamt" name="pamt" inputmode="decimal" value="${esc(centsToInput(d.amount))}" placeholder="$0.00" autocomplete="off">`, "What lands in your account. You can change it each time.")}
+    <div class="field"><span class="lab">Whose?</span>${whoRadios("pwho", d.who)}</div>
+    ${field("pcycle","How often", `<select id="pcycle" name="pcycle">${Object.entries(PAY_CYCLES).map(([k, l]) => `<option value="${k}" ${d.cycle === k ? "selected" : ""}>${l}</option>`).join("")}</select>`)}
+    <div id="pDateBox">${field("pnext","Next payday", `<input id="pnext" name="pnext" type="date" value="${esc(d.cycle === "weekly" || d.cycle === "biweekly" ? d.next : todayStr())}">`)}</div>
+    <div class="two" id="pDaysBox">${field("pday1","On the", `<select id="pday1" name="pday1">${dayOptions(dd[0])}</select>`)}
+      <div id="pDay2Wrap">${field("pday2","and the", `<select id="pday2" name="pday2">${dayOptions(dd[1])}</select>`)}</div></div>
+    <label class="chip" style="align-self:flex-start;cursor:pointer"><input type="checkbox" name="pweekend" ${d.weekend ? "checked" : ""} style="accent-color:var(--accent)"> If it lands on a weekend, it comes the Friday before</label>
+    ${footer(p ? "delPayday:" + p.id : "")}`,
+  form => {
+    const name = val(form, "pname"), amount = parseMoney(val(form, "pamt")), cycle = val(form, "pcycle");
+    const who = (form.querySelector("input[name=pwho]:checked") || {}).value;
+    if(!name) return fail("pname", "Name it, like Paycheck.");
+    if(amount === null) return fail("pamt", "Enter an amount like 2400 or 2,400.50.");
+    if(!PAY_CYCLES[cycle]) return fail("pcycle", "Pick how often it comes.");
+    if(!HUMANS.includes(who)) return fail("pname", "Pick whose paycheck it is.");
+    let days = [], next;
+    if(cycle === "weekly" || cycle === "biweekly"){
+      next = val(form, "pnext");
+      if(!isDate(next)) return fail("pnext", "Pick the date of your next payday.");
+      if(diffDays(todayStr(), next) < -31) return fail("pnext", "Pick your next payday (it can't be more than a month ago).");
+    } else {
+      const a = clampInt(val(form, "pday1"), 1, 31, 0), b = clampInt(val(form, "pday2"), 1, 31, 0);
+      days = cycle === "monthly" ? [a] : [a, b].sort((x, y) => x - y);
+      if(!a || (cycle === "semimonthly" && (!b || a === b))) return fail(cycle === "monthly" ? "pday1" : "pday2", "Pick two different days.");
+      const same = p && p.cycle === cycle && JSON.stringify(p.days) === JSON.stringify(days);
+      next = same ? p.next : payByDays(days, todayStr(), false);   // keep your place unless the days changed
+    }
+    const data = {name, amount, who, cycle, next, days, weekend: form.elements.pweekend.checked};
+    if(p) Object.assign(p, data); else state.budget.paydays.push(Object.assign({id:uid()}, data));
+    save(); closeSheet(); render(); toast(`Saved · next payday ${niceDate(payActual(data, next))}`);
+  });
+  const sync = () => { const c = val($("#sheetForm"), "pcycle"); $("#pDateBox").hidden = !(c === "weekly" || c === "biweekly"); $("#pDaysBox").hidden = !(c === "semimonthly" || c === "monthly"); $("#pDay2Wrap").hidden = c !== "semimonthly"; };
+  $("#pcycle").addEventListener("change", sync); sync();
+}
 const BUDGET_ACTIONS = {
   bmonth: id => { const n = +id; budgetMonth = n === 0 ? todayStr().slice(0, 7) : addMonthKey(curMonth(), n); render(); },
   newTxn: () => txnForm(null),
@@ -3377,6 +3468,18 @@ const BUDGET_ACTIONS = {
   wrapDismiss: id => { prefs.wrapSeen = Object.assign({}, prefs.wrapSeen, {[id]: true}); savePrefs(); render(); },
   editCat: id => catForm(id || null),
   editBill: id => billForm(id || null),
+  editPayday: id => paydayForm(id || null),
+  gotPay: id => { const p = state.budget.paydays.find(x => x.id === id); if(!p) return;
+    const t = todayStr(), a = payActual(p, p.next), prev = p.next, date = a > t ? t : a;
+    const tx = {id:uid(), kind:"income", amount:p.amount, date, note:p.name, paidBy:p.who, shared:false, categoryId:null, billId:null, paydayId:p.id};
+    state.budget.txns.push(tx); p.next = payAfter(p, p.next); budgetMonth = date.slice(0, 7); save(); render();
+    toast(`${money(p.amount)} logged · next payday ${niceDate(payActual(p, p.next))}`, () => { state.budget.txns = state.budget.txns.filter(x => x.id !== tx.id); p.next = prev; save(); render(); }); },
+  payShare: id => { const e = state.budget.txns.find(x => x.id === id && x.kind === "expense"); if(!e) return;
+    const nt = netTx().find(x => x.id === id) || e, ower = other(e.paidBy); closeSheet();
+    settleForm(null, {amount: Math.round(shareOf(nt, ower)), paidBy: ower, note: expLabel(e), date: todayStr()}); },
+  pbToSettle: id => { const r = state.budget.txns.find(x => x.id === id && x.kind === "income"); if(!r) return;
+    const e = state.budget.txns.find(x => x.id === r.repays) || {}; closeSheet();
+    settleForm(null, {amount: r.amount, date: r.date, note: r.note || expLabel(e), paidBy: e.paidBy ? other(e.paidBy) : r.paidBy}, r.id); },
   addPayback: id => { const e = state.budget.txns.find(x => x.id === id && x.kind === "expense"); if(!e) return; closeSheet();
     txnForm(null, {kind:"income", repays:e.id, paidBy:e.paidBy, date: todayStr() >= e.date ? todayStr() : e.date, note:""}); },
   pbPair: id => { const inc = state.budget.txns.find(x => x.id === id && x.kind === "income"); if(!inc) return; const c = bestPayback(inc); if(!c) return;
@@ -3392,6 +3495,7 @@ const BUDGET_DELETES = {
     pb.forEach(t => { delete t.repays; t.noRepay = true; });   // keep the money: it counts as income again
     return pb.length ? `Entry deleted · ${pb.length === 1 ? "its payback counts" : "its paybacks count"} as income now` : "Entry deleted"; },
   delBill: id => removeBy(state.budget.bills, id) && "Bill deleted",
+  delPayday: id => removeBy(state.budget.paydays, id) && "Paycheck removed · income you already logged stays",
   delCat: id => { const ok = removeBy(state.budget.categories, id); if(ok){ Object.values(state.budget.plan).forEach(m => { delete m[id]; }); state.budget.txns.forEach(t => { if(t.categoryId === id) t.categoryId = null; }); state.budget.bills.forEach(b => { if(b.categoryId === id) b.categoryId = null; }); } return ok && "Category deleted. Its spending is now uncategorized."; }
 };
 function normalizeBudget(raw){
@@ -3415,7 +3519,13 @@ function normalizeBudget(raw){
     bills: objs(b.bills).filter(x => str(x.name).trim() && cents(x.amount) && isDate(x.nextDue)).map(x => Object.assign({}, x, {
       id: x.id ? String(x.id) : uid(), name: str(x.name, 40).trim(), amount: cents(x.amount), cycle: BILL_CYCLES[x.cycle] ? x.cycle : "monthly",
       anchorDay: clampInt(x.anchorDay, 1, 31, +x.nextDue.slice(8)),
-      categoryId: catIds.has(x.categoryId) ? x.categoryId : null, paidBy: HUMANS.includes(x.paidBy) ? x.paidBy : "sam", shared: !!x.shared, split: x.shared ? cleanSplit(x.split, cents(x.amount)) : null, autopay: !!x.autopay }))
+      categoryId: catIds.has(x.categoryId) ? x.categoryId : null, paidBy: HUMANS.includes(x.paidBy) ? x.paidBy : "sam", shared: !!x.shared, split: x.shared ? cleanSplit(x.split, cents(x.amount)) : null, autopay: !!x.autopay })),
+    paydays: objs(b.paydays).filter(x => str(x.name).trim() && cents(x.amount) && PAY_CYCLES[x.cycle] && isDate(x.next)).map(x => {
+      const days = (Array.isArray(x.days) ? x.days : []).map(d => clampInt(d, 1, 31, 0)).filter(Boolean).slice(0, 2).sort((a, b) => a - b);
+      const need = x.cycle === "semimonthly" ? 2 : x.cycle === "monthly" ? 1 : 0;
+      return Object.assign({}, x, {id: x.id ? String(x.id) : uid(), name: str(x.name, 40).trim(), amount: cents(x.amount), who: HUMANS.includes(x.who) ? x.who : "sam",
+        days: days.length >= need ? [...new Set(days)].slice(0, need) : (need === 2 ? [15, 31] : need === 1 ? [+x.next.slice(8)] : []), weekend: !!x.weekend});
+    }).filter(x => x.cycle !== "semimonthly" || x.days.length === 2)
   });
 }
 function billsDueHTML(){
@@ -3810,7 +3920,7 @@ function jeffSettingsForm(){
    into one view. Only custom events are stored separately (state.events).
    ============================================================ */
 const EV_TYPES = {
-  holiday:{label:"Holidays", cls:"t-holiday"}, chore:{label:"Chores", cls:"t-chore"}, meal:{label:"Meals", cls:"t-meal"}, bill:{label:"Bills", cls:"t-bill"},
+  holiday:{label:"Holidays", cls:"t-holiday"}, chore:{label:"Chores", cls:"t-chore"}, meal:{label:"Meals", cls:"t-meal"}, bill:{label:"Bills", cls:"t-bill"}, payday:{label:"Paydays", cls:"t-pay"},
   health:{label:"Health", cls:"t-health"}, bday:{label:"Birthdays", cls:"t-bday"}, event:{label:"Events", cls:"t-event"}, pantry:{label:"Use by", cls:"t-pantry"}
 };
 /* US federal holidays (5 U.S.C. 6103). A Saturday holiday is observed the Friday before,
@@ -3863,6 +3973,7 @@ function calendarItems(from, to){
     project(due, c.freq, c.everyDays, o);
   });
   state.meals.forEach(m => push(m.date, {type:"meal", title:`${SLOTS[m.slot]}: ${mealLabel(m)}`, who:"", act:"editMeal", id:m.id, order:Object.keys(SLOTS).indexOf(m.slot)}));
+  state.budget.paydays.forEach(p => payDates(p, from < t ? t : from, to).forEach(x => push(x.date, {type:"payday", title:`Payday: ${p.name} · ${money(p.amount)}`, who:p.who, act:"editPayday", id:p.id})));
   state.budget.bills.forEach(b => project(b.nextDue, b.cycle, 0, {type:"bill", title:`${b.name} · ${money(b.amount)}`, who: b.shared ? "" : b.paidBy, act:"editBill", id:b.id}, b.anchorDay));
   PEOPLE.forEach(k => {
     const p = state.people[k];
@@ -5272,7 +5383,7 @@ function toast(msg, undo, label, ms){
   toastTimer = setTimeout(() => { $("#toastRoot").innerHTML = ""; toast.undo = null; }, ms || (undo ? 5000 : 2200));
 }
 /* ---- which version is this, and is there a newer one? ---- */
-const BUILD = "2026-10-30 · 33";
+const BUILD = "2026-10-30 · 35";
 let updateSeen = "";
 async function checkForUpdate(){
   if(!/^https?:$/.test(location.protocol) || navigator.onLine === false) return;
@@ -5407,7 +5518,7 @@ const ACCOUNTS = {sam:["samzenteno@gmail.com"], charlie:["charliepurdomva@gmail.
 const SYNC_LISTS = [
   ["chore", st => st.chores], ["note", st => st.notes], ["recipe", st => st.recipes], ["meal", st => st.meals],
   ["grocery", st => st.grocery], ["pantry", st => st.pantry], ["event", st => st.events],
-  ["bcat", st => st.budget.categories], ["txn", st => st.budget.txns], ["bill", st => st.budget.bills],
+  ["bcat", st => st.budget.categories], ["txn", st => st.budget.txns], ["bill", st => st.budget.bills], ["payday", st => st.budget.paydays],
   ["fgoal", st => st.budget.fund.goals], ["fentry", st => st.budget.fund.entries]
 ];
 function syncHash(str){ let h1 = 0xdeadbeef, h2 = 0x41c6ce57; for(let i = 0; i < str.length; i++){ const c = str.charCodeAt(i); h1 = Math.imul(h1 ^ c, 2654435761); h2 = Math.imul(h2 ^ c, 1597334677); }
@@ -5452,7 +5563,7 @@ function keepIdentity(oldS, newS, applied){
 }
 function emptyHousehold(){
   const d = defaults();
-  d.budget.categories = []; d.budget.txns = []; d.budget.bills = []; d.budget.plan = {}; d.budget.fund.goals = []; d.budget.fund.entries = [];
+  d.budget.categories = []; d.budget.txns = []; d.budget.bills = []; d.budget.paydays = []; d.budget.plan = {}; d.budget.fund.goals = []; d.budget.fund.entries = [];
   return d;
 }
 const sync = {status:"off", user:null, err:"", last:{}, ever:false, unsub:null, timer:0, at:0, pending:0, offline:false, retry:0, rseq:{}};
@@ -5677,6 +5788,7 @@ function describeChange(key, o, n){
   }
   if(kind === "recipe"){ if(!n) return null; if(!o) return `added a recipe: ${clip(n.title, 40)}`; if((n.cooked || []).length > (o.cooked || []).length) return `made ${clip(n.title, 40)}`; return null; }
   if(kind === "txn"){ if(!n || o) return null; return n.kind === "settle" ? "settled up" : n.kind === "income" ? "logged income" : "logged spending"; }
+  if(kind === "payday"){ if(!n || o) return null; return `added a payday: ${clip(n.name, 30)}`; }
   if(kind === "bill"){ if(!n) return null; if(!o) return `added a bill: ${clip(n.name, 30)}`; if(n.nextDue > o.nextDue) return `paid ${clip(n.name, 30)}`; return null; }
   if(kind === "fentry"){ if(!n || o) return null; return n.kind === "in" ? "added money to the Fun Fund" : n.kind === "out" ? "took money out of the Fun Fund" : null; }
   if(kind === "fgoal"){ if(!n || o) return null; return `started a Fun Fund goal: ${clip(n.name, 30)}`; }

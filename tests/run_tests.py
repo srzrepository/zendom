@@ -1487,6 +1487,123 @@ async def test_keyboard_sheet(browser):
     await pg.context.close()
 
 
+async def test_paydays(browser):
+    pg = await new_page(browser, clock="2026-10-30T13:00:00-07:00")      # a Friday
+    await ev(pg, "(() => { state.budget.paydays = []; state.budget.txns = []; budgetMonth = '2026-10'; prefs.spendWho = ''; save(); ACTIONS.tab('budget'); ACTIONS.btab('spending'); })()")
+    check("paydays: empty state invites adding one", "Add your paychecks" in await ev(pg, "document.querySelector('#view').innerText"))
+    await act(pg, "editPayday")
+    await fill(pg, {"pname": "", "pamt": "2400"}); await submit(pg)
+    check("paydays: a name is required", "Name it" in await err_text(pg))
+    await fill(pg, {"pname": "Stanford", "pamt": "abc"}); await submit(pg)
+    check("paydays: a bad amount is refused", "Enter an amount" in await err_text(pg))
+    await fill(pg, {"pamt": "2,400", "pcycle": "semimonthly", "pday1": "15", "pday2": "15"}); await submit(pg)
+    check("paydays: twice a month needs two different days", "two different days" in await err_text(pg))
+    check("paydays: the date box hides for day-of-month schedules", await ev(pg, "document.querySelector('#pDateBox').hidden && !document.querySelector('#pDaysBox').hidden"))
+    await fill(pg, {"pday2": "31"}); await submit(pg)
+    p = (await stored(pg))["budget"]["paydays"]
+    check("paydays: saved 15th + last day, next is Oct 31", len(p) == 1 and p[0]["days"] == [15, 31] and p[0]["next"] == "2026-10-31" and p[0]["amount"] == 240000 and p[0]["weekend"] is True, json.dumps(p))
+    view = await ev(pg, "document.querySelector('#view').innerText")
+    check("paydays: Oct 31 is a Saturday, so it's paid Friday (today)", "Payday today" in view and "The 15th and last day" in view, view[:600])
+    check("paydays: income shows what's still expected this month", "+ $2,400.00 expected by Oct 31" in view)
+    check("paydays: list heading shows about $4,800/mo", "Paychecks · $4,800.00/mo" in view)
+    # calendar: Oct 30 (Fri, moved from Sat 31), Nov 13 (Fri, moved from Sun 15), Nov 30 (Mon)
+    items = await ev(pg, "calendarItems('2026-10-30', '2026-12-01').filter(x => x.type === 'payday').map(x => x.date).join()")
+    check("paydays: calendar shows Oct 30, Nov 13, Nov 30", items == "2026-10-30,2026-11-13,2026-11-30", items)
+    pid = p[0]["id"]
+    await act(pg, "gotPay", pid)
+    st = await stored(pg); inc = [t for t in st["budget"]["txns"] if t["kind"] == "income"]
+    check("paydays: Got it logs the income on payday and moves on", len(inc) == 1 and inc[0]["amount"] == 240000 and inc[0]["date"] == "2026-10-30" and inc[0]["paidBy"] == "sam" and st["budget"]["paydays"][0]["next"] == "2026-11-15", json.dumps(inc))
+    view = await ev(pg, "document.querySelector('#view').innerText")
+    check("paydays: nothing more expected in October once it's in", "expected by" not in view and "$2,400.00" in view)
+    check("paydays: next shows Nov 13 with no Got it button yet", "Nov 13" in view and await ev(pg, "!document.querySelector('[data-act=gotPay]')"))
+    await act(pg, "undo")
+    st = await stored(pg)
+    check("paydays: undo removes the income and puts the payday back", not [t for t in st["budget"]["txns"] if t["kind"] == "income"] and st["budget"]["paydays"][0]["next"] == "2026-10-31")
+    await act(pg, "gotPay", pid)
+    await act(pg, "bmonth", "1")
+    check("paydays: November expects two paychecks", "+ $4,800.00 expected by Nov 30" in await ev(pg, "document.querySelector('#view').innerText"))
+    await act(pg, "bmonth", "-1"); await act(pg, "bmonth", "-1")
+    check("paydays: past months don't show expected income", "expected by" not in await ev(pg, "document.querySelector('#view').innerText"))
+    await act(pg, "bmonth", "0")
+    # Charlie: every 2 weeks from next Friday
+    await act(pg, "editPayday")
+    await fill(pg, {"pname": "Charlie pay", "pamt": "1800", "pcycle": "biweekly", "pnext": "2026-11-06"})
+    await pg.locator('#sheetForm input[name=pwho][value=charlie]').check(); await submit(pg)
+    check("paydays: every 2 weeks: Nov 6 and Nov 20", await ev(pg, "payDates(state.budget.paydays.find(p => p.who === 'charlie'), '2026-11-01', '2026-11-30').map(x => x.date).join()") == "2026-11-06,2026-11-20")
+    check("paydays: expected by person", await ev(pg, "[expectedPay('2026-11-01','2026-11-30'), expectedPay('2026-11-01','2026-11-30','charlie'), expectedPay('2026-11-01','2026-11-30','sam')].join()") == "840000,360000,480000")
+    await act(pg, "spendWho", "charlie"); await act(pg, "bmonth", "1")
+    v = await ev(pg, "document.querySelector('#view').innerText")
+    check("paydays: Charlie's view lists only his paycheck and his expected income", "Charlie pay" in v and "Stanford" not in v and "+ $3,600.00 expected" in v)
+    await act(pg, "spendWho", ""); await act(pg, "bmonth", "0")
+    # once a month on the last day; edit keeps its place
+    await act(pg, "editPayday", pid)
+    await fill(pg, {"pamt": "2500"}); await submit(pg)
+    check("paydays: editing the amount keeps the schedule", await ev(pg, f"(() => {{ const p = state.budget.paydays.find(x => x.id === '{pid}'); return p.amount + '|' + p.next; }})()") == "250000|2026-11-15")
+    await act(pg, "editPayday", pid)
+    await fill(pg, {"pcycle": "monthly", "pday1": "31"}); await submit(pg)
+    check("paydays: once a month on the last day: next is Oct 31 again (paid today)", await ev(pg, f"state.budget.paydays.find(x => x.id === '{pid}').next") == "2026-10-31")
+    await act(pg, "editPayday", pid)
+    await fill(pg, {"pcycle": "weekly"}); await ev(pg, "document.querySelector('#pcycle').dispatchEvent(new Event('change'))"); await fill(pg, {"pnext": "2026-08-01"}); await submit(pg)
+    check("paydays: a next payday months ago is refused", "can't be more than a month ago" in await err_text(pg))
+    await ev(pg, "closeSheet()")
+    # week view in the calendar shows it
+    await act(pg, "tab", "today"); await act(pg, "tview", "week")
+    check("paydays: the week view shows the payday", "Payday: Stanford" in await ev(pg, "document.querySelector('#view').innerText"))
+    await act(pg, "tview", "today"); await act(pg, "tab", "budget")
+    # delete keeps logged income
+    await act(pg, "editPayday", pid); await confirm_delete(pg)
+    st = await stored(pg)
+    check("paydays: removing a paycheck keeps income already logged", len(st["budget"]["paydays"]) == 1 and len([t for t in st["budget"]["txns"] if t["kind"] == "income"]) == 1)
+    # stored data: a broken payday is dropped, a good one survives a reload
+    await ev(pg, "(() => { const raw = JSON.parse(localStorage.getItem('zendom:data')); raw.budget.paydays.push({id:'bad', name:'x', amount:'nope', cycle:'biweekly', next:'2026-11-01'}, {id:'odd', name:'Odd', amount:5000, cycle:'semimonthly', next:'2026-11-01', days:[1]}); localStorage.setItem('zendom:data', JSON.stringify(raw)); })()")
+    await pg.reload(); await pg.wait_for_timeout(300)
+    ids = await ev(pg, "state.budget.paydays.map(p => p.id + ':' + (p.days || []).join('/')).join()")
+    check("paydays: survives a reload; a broken entry is dropped, a half-set one gets defaults", "bad" not in ids and "odd:15/31" in ids and ids.count(":") == 2, ids)
+    # data from before this step (no paydays list) loads fine
+    await ev(pg, "(() => { const raw = JSON.parse(localStorage.getItem('zendom:data')); delete raw.budget.paydays; localStorage.setItem('zendom:data', JSON.stringify(raw)); })()")
+    await pg.reload(); await pg.wait_for_timeout(300)
+    check("paydays: older saved data loads with an empty list", await ev(pg, "Array.isArray(state.budget.paydays) && state.budget.paydays.length === 0"))
+    check("paydays: no page errors", not pg.errors, "; ".join(pg.errors))
+    await pg.context.close()
+
+
+async def test_share_payments(browser):
+    pg = await new_page(browser, clock="2026-10-30T15:00:00-07:00")
+    # Sam's situation: Charlie paid $3,600 rent split by amount (Sam $1,500); Sam's $1,500 to Charlie was entered as a payback
+    await ev(pg, """(() => { prefs.user = 'sam'; savePrefs(); state.budget.categories = [{id:'r', name:'Rent & utilities', limit:0}]; state.budget.txns = [
+        {id:'rent', kind:'expense', amount:360000, date:'2026-10-30', categoryId:'r', paidBy:'charlie', shared:true, split:{mode:'amt', sam:150000}, note:'Rent & utilities', billId:null},
+        {id:'oops', kind:'income', amount:150000, date:'2026-10-30', categoryId:null, paidBy:'sam', shared:false, note:'november rent', billId:null, repays:'rent'}];
+      budgetMonth = '2026-10'; save(); ACTIONS.tab('budget'); ACTIONS.btab('spending'); })()""")
+    check("share: the mistaken payback shrank rent to $2,100 (the bug Sam saw)", await ev(pg, "monthStats('2026-10').spent") == 210000)
+    await ev(pg, "ACTIONS.editTxn('oops')")
+    check("share: a payback on a shared cost offers to become a payment", await ev(pg, "!!document.querySelector('[data-act=pbToSettle]')"))
+    await act(pg, "pbToSettle", "oops")
+    v = await ev(pg, "({amt: document.querySelector('#samt').value, memo: document.querySelector('#smemo').value, who: document.querySelector('input[name=paidBy]:checked').value})")
+    check("share: Record payment opens filled in ($1,500, Sam paid, 'november rent')", v == {"amt": "1500", "memo": "november rent", "who": "sam"}, json.dumps(v))
+    await submit(pg)
+    st = await stored(pg); tx = {t["id"]: t for t in st["budget"]["txns"]}
+    settles = [t for t in st["budget"]["txns"] if t["kind"] == "settle"]
+    check("share: it became a payment and the payback is gone", "oops" not in tx and len(settles) == 1 and settles[0]["amount"] == 150000 and settles[0]["paidBy"] == "sam")
+    check("share: rent is back to $3,600 and you're even", await ev(pg, "monthStats('2026-10').spent") == 360000 and await ev(pg, "balance()") == 0)
+    # the normal way: pay your share from the expense
+    await ev(pg, "(() => { state.budget.txns = state.budget.txns.filter(t => t.kind !== 'settle'); save(); render(); ACTIONS.editTxn('rent'); })()")
+    check("share: before paying, Sam owes Charlie $1,500", await ev(pg, "balance()") == -150000)
+    lbl = await ev(pg, "document.querySelector('[data-act=payShare]').textContent")
+    check("share: the expense offers 'I paid Charlie my share ($1,500.00)'", lbl == "I paid Charlie my share ($1,500.00)", lbl)
+    check("share: the payback button now says it's for a friend", "A friend paid me back" in await ev(pg, "document.querySelector('#pbBox').innerText"))
+    await act(pg, "payShare", "rent")
+    v = await ev(pg, "({amt: document.querySelector('#samt').value, memo: document.querySelector('#smemo').value, who: document.querySelector('input[name=paidBy]:checked').value})")
+    check("share: Record payment is filled in from the expense", v == {"amt": "1500", "memo": "Rent & utilities", "who": "sam"}, json.dumps(v))
+    await submit(pg)
+    check("share: paying your share clears what's owed without changing the rent", await ev(pg, "balance()") == 0 and await ev(pg, "monthStats('2026-10').spent") == 360000)
+    # from Charlie's phone, the same button reads the other way
+    await ev(pg, "(() => { prefs.user = 'charlie'; savePrefs(); ACTIONS.editTxn('rent'); })()")
+    check("share: Charlie sees no 'my share' button for rent he paid... he sees Sam paid him", await ev(pg, "document.querySelector('[data-act=payShare]').textContent") == "Sam paid me her share ($1,500.00)")
+    await ev(pg, "closeSheet()")
+    check("share: no page errors", not pg.errors, "; ".join(pg.errors))
+    await pg.context.close()
+
+
 async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch()
@@ -1511,6 +1628,8 @@ async def main():
         await test_payment_memo(browser)
         await test_paybacks(browser)
         await test_keyboard_sheet(browser)
+        await test_paydays(browser)
+        await test_share_payments(browser)
         await browser.close()
     failed = [r for r in results if not r[1]]
     print(f"\n{len(results) - len(failed)} of {len(results)} checks passed")
