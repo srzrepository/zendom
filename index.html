@@ -1,4 +1,4 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#8a4d22"><meta name="apple-mobile-web-app-title" content="zen·dom"><meta name="apple-mobile-web-app-capable" content="yes"><link rel="apple-touch-icon" href="apple-touch-icon.png"><link rel="manifest" href="manifest.json"><style>body{margin:0}</style><script src="firebase-bundle.js"></script></head><body>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#8a4d22"><meta name="apple-mobile-web-app-title" content="zen·dom"><meta name="apple-mobile-web-app-capable" content="yes"><link rel="apple-touch-icon" href="apple-touch-icon.png"><link rel="manifest" href="manifest.json"><style>body{margin:0}</style><script src="firebase-bundle.js"></script></head><body>
 <title>zen·dom</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -1553,9 +1553,13 @@ function dinnerCardHTML(){
         + `<button type="button" class="link" data-act="editMeal" data-id="${m.id}" style="padding-left:0">${m.comments.length ? "Reply" : "Comment"}</button>`; }).join("")}
     <button type="button" class="link" data-act="goKitchen" data-id="plan" style="padding-left:0">See the week</button></div></section>`;
 }
+const MEALTIME = /^(lunch|dinner)$/i;
+const isMealRecipe = r => r.categories.some(c => MEALTIME.test(c));
 function closestHTML(){
   if(!state.pantry.length) return "";
-  const best = state.recipes.filter(r => r.ingredients.length).map(r => ({r, rd:readiness(r)})).filter(x => x.rd.pct >= 50)
+  if(state.recipes.some(r => r.ingredients.length) && !state.recipes.some(isMealRecipe))
+    return `<p class="small muted" style="margin:6px 0 0">Tag recipes as Lunch or Dinner and I'll suggest the ones you can almost make.</p>`;
+  const best = state.recipes.filter(r => r.ingredients.length && isMealRecipe(r)).map(r => ({r, rd:readiness(r)})).filter(x => x.rd.pct >= 50)
     .sort((a,b) => b.rd.pct - a.rd.pct || a.rd.missing.length - b.rd.missing.length).slice(0, 2);
   if(!best.length) return "";
   return `<div class="closest"><span class="small muted">Closest with what you have</span>${best.map(x => `<button type="button" class="link closest-link" data-act="openRecipe" data-id="${x.r.id}">${esc(x.r.title)} · ${x.rd.pct}% →</button>`).join("")}</div>`;
@@ -2626,7 +2630,8 @@ function pantryForm(id){
 /* ---- kitchen actions (merged into ACTIONS at boot) ---- */
 const KITCHEN_ACTIONS = {
   ktab: id => { if(KTABS[id]){ prefs.kitchenTab = id; savePrefs(); render(); window.scrollTo(0,0); } },
-  whatCanWeMake: () => { prefs.tab = "kitchen"; prefs.kitchenTab = "recipes"; recipeSort = "ready"; rf.types.clear(); rf.time = 0; rf.ready = 0; rf.fav = false; recipeQuery = ""; savePrefs(); render(); window.scrollTo(0,0); },
+  whatCanWeMake: () => { prefs.tab = "kitchen"; prefs.kitchenTab = "recipes"; recipeSort = "ready"; rf.types.clear();
+    allCategories([]).filter(c => MEALTIME.test(c) && state.recipes.some(r => r.categories.includes(c))).forEach(c => rf.types.add(c)); rf.time = 0; rf.ready = 0; rf.fav = false; recipeQuery = ""; savePrefs(); render(); window.scrollTo(0,0); },
   goKitchen: id => { prefs.tab = "kitchen"; if(KTABS[id]) prefs.kitchenTab = id; savePrefs(); render(); window.scrollTo(0,0); },
   newRecipe: () => recipeForm(null),
   editRecipe: id => recipeForm(id),

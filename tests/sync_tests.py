@@ -121,7 +121,7 @@ async def main():
         await settle(A, B)
         check("a chore added on Sam's phone shows on Charlie's", await ev(B, "state.chores.some(c => c.id === 'shared1')"))
         await ev(B, "ACTIONS.tab('chores'); ACTIONS.filter('all'); toggleChore('shared1')"); await settle(A, B)
-        check("Charlie ticks it off and Sam sees it", await ev(A, "state.chores.find(c => c.id === 'shared1').lastDone") == "2026-10-29")
+        check("Charlie ticks it off and Sam sees it", await ev(A, "state.chores.find(c => c.id === 'shared1').lastDone") == await ev(A, "todayStr()"))
         check("Sam's screen updates without a reload", await ev(A, "ACTIONS.tab('chores'); ACTIONS.filter('all'); !!document.querySelector('[data-act=toggle][data-id=shared1][aria-pressed=true]')"))
         nid = await ev(A, "state.notes[0].id")
         await ev(A, f"removeBy(state.notes, '{nid}'); save()"); await settle(A, B)

@@ -1099,6 +1099,24 @@ async def test_wrapup(browser):
     await pg.context.close()
 
 
+async def test_dinner_suggestions(browser):
+    pg = await new_page(browser, clock="2026-10-30T08:30:00-07:00")
+    await ev(pg, """(() => { state.meals = []; state.pantry = [{id:'p1', name:'butter', qty:'', room:'fridge', expires:''}, {id:'p2', name:'flour', qty:'', room:'pantry', expires:''}, {id:'p3', name:'chicken', qty:'', room:'fridge', expires:''}];
+      state.recipes = [{id:'c', title:'London Fog Cookies', servings:12, prep:'', cook:'', categories:['Dessert'], ingredients:['1 cup butter', '2 cups flour'], steps:['Bake.'], notes:'', source:'', favorite:false, example:false, created:1, cooked:[], photos:[]},
+                       {id:'d', title:'Chicken and butter', servings:2, prep:'', cook:'', categories:['Dinner'], ingredients:['1 lb chicken', '2 tbsp butter'], steps:['Cook.'], notes:'', source:'', favorite:false, example:false, created:1, cooked:[], photos:[]}];
+      save(); ACTIONS.tab('today'); ACTIONS.tview('today'); })()""")
+    card = await ev(pg, "[...document.querySelectorAll('.soon-card')].map(e => e.innerText).find(t => t.includes(\"Tonight's dinner\")) || ''")
+    check("dinner ideas: dinner recipes are suggested", "Chicken and butter" in card, card)
+    check("dinner ideas: cookies (dessert) are not", "London Fog" not in card, card)
+    await act(pg, "whatCanWeMake")
+    check("dinner ideas: What can we make? opens on Lunch/Dinner recipes", await ev(pg, "[...rf.types].join()") == "Dinner" and "London Fog" not in await ev(pg, "document.querySelector('#view').innerText"))
+    await ev(pg, "state.recipes.forEach(r => r.categories = ['Dessert']); save(); ACTIONS.tab('today')")
+    check("dinner ideas: with no Lunch/Dinner recipes it says how to get ideas", "Tag recipes as Lunch or Dinner" in await ev(pg, "document.querySelector('#view').innerText"))
+    check("viewport covers the notch area so the status bar strip is painted", "viewport-fit=cover" in await ev(pg, "document.querySelector('meta[name=viewport]').content"))
+    check("dinner ideas: no page errors", not pg.errors, "; ".join(pg.errors))
+    await pg.context.close()
+
+
 async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch()
@@ -1115,6 +1133,7 @@ async def main():
         await test_shortcut_paste(browser)
         await test_bedtime(browser)
         await test_wrapup(browser)
+        await test_dinner_suggestions(browser)
         await browser.close()
     failed = [r for r in results if not r[1]]
     print(f"\n{len(results) - len(failed)} of {len(results)} checks passed")
