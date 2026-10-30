@@ -2927,6 +2927,31 @@ function paybackCands(inc){
 }
 const bestPayback = inc => paybackCands(inc).find(c => c.hit && c.fits) || null;
 const expLabel = t => t.note || catName(t.categoryId);
+/* ---- duplicates ---- */
+const sameDupKind = (a, b) => a.kind === b.kind && a.amount === b.amount && (a.kind !== "settle" || a.paidBy === b.paidBy);
+// An existing entry that looks like the same thing: same kind and amount within 3 days (payments: same payer)
+function dupOf(c, exceptId){
+  return state.budget.txns.find(t => t.id !== exceptId && !t.cancelled && isDate(t.date) && sameDupKind(t, c) && Math.abs(diffDays(t.date, c.date)) <= 3) || null;
+}
+const txLabel = t => t.note || (t.kind === "settle" ? "Payment between you" : t.kind === "income" ? "Income" : catName(t.categoryId));
+// Pairs that look like duplicates (last 120 days), minus ones you said to keep
+function dupPairs(){
+  const t0 = todayStr(), live = state.budget.txns.filter(t => !t.cancelled && isDate(t.date) && diffDays(t.date, t0) <= 120).sort((a, b) => a.date.localeCompare(b.date));
+  const kept = (a, b) => (a.notDup || []).includes(b.id) || (b.notDup || []).includes(a.id);
+  const out = [];
+  for(let i = 0; i < live.length; i++) for(let j = i + 1; j < live.length && diffDays(live[i].date, live[j].date) <= 3; j++)
+    if(sameDupKind(live[i], live[j]) && !kept(live[i], live[j])) out.push([live[i], live[j]]);
+  return out;
+}
+// Show a warning under a field once per form; tapping Save again goes ahead
+function warnOnce(form, key, fieldId, msg, openId){
+  const k = "ok" + key.replace(/[^a-z0-9]/gi, ""); if(form.dataset[k]) return false;
+  form.dataset[k] = "1"; fail(fieldId, msg);
+  const f = $("#f-" + fieldId);
+  if(f && openId) f.insertAdjacentHTML("beforeend", `<button type="button" class="link" data-act="editTxn" data-id="${esc(openId)}" style="align-self:flex-start;padding-left:0">Open the one you have</button>`);
+  return true;
+}
+const dupMsg = d => `You already have “${txLabel(d)}” for ${money(d.amount)} on ${niceDate(d.date)}. If this is a different one, tap Save again.`;
 function balanceUntil(day){
   let b = 0;
   netTx().forEach(t => { if(t.date > day || t.cancelled) return; b += paybackEff(t);
@@ -3138,7 +3163,7 @@ function viewBudget(){
     <div class="stat"><span class="label">${who ? `${esc(nameOf(who))}'s share` : "Spent"}</span><b>${money(st.spent)}</b>${who ? `<span class="small muted">${money(ps.paid)} paid by ${esc(nameOf(who))}</span>` : st.budgeted ? `<span class="small muted">of ${money(st.budgeted)} budgeted</span>` : ""}</div>
     <div class="stat"><span class="label">${who ? `${esc(nameOf(who))}'s income` : "Income"}</span><b>${money(st.income)}</b><span class="small muted">${st.income ? `${money(Math.abs(st.income - st.spent))} ${st.income >= st.spent ? "after spending" : "short"}` : "None logged"}</span>${expect ? `<span class="small muted expect">+ ${money(expect)} expected by ${esc(niceDate(mEnd))}</span>` : ""}</div>
   </div>
-  ${paybackHintHTML()}
+  ${dupCardHTML()}${paybackHintHTML()}
   ${hasShared ? `<section class="card settle"><div><span class="label">Shared spending</span>
       <p style="margin:2px 0 0;font-weight:600"><button type="button" class="owebtn" data-act="oweDetail">${bal === 0 ? "You're even." : `<u>${bal > 0 ? "Charlie owes Sam" : "Sam owes Charlie"} ${money(Math.abs(bal))}</u>`}</button></p>
       <span class="small muted">Tap to see what makes it up.</span></div>
@@ -3315,6 +3340,7 @@ function txnForm(id, preset){
     const data = {kind, amount, date, note:val(form,"tnote"), paidBy, categoryId: kind === "expense" && state.budget.categories.some(c => c.id === cid) ? cid : null, shared, split: sp.split,
       details: form.elements.tdetails.value.trim().slice(0, 500), cancelled: form.elements.tcancel.checked};
     if(repays){ data.repays = repays; }
+    if(!t){ const dup = dupOf(data); if(dup && warnOnce(form, "dup" + dup.id, "amt", dupMsg(dup), dup.id)) return; }
     if(t){ Object.assign(t, data); if(!repays) delete t.repays; else delete t.noRepay; } else state.budget.txns.push(Object.assign({id:uid(), billId:null}, data));
     const pe = repays && state.budget.txns.find(x => x.id === repays);
     budgetMonth = (pe ? pe.date : date).slice(0, 7);   // a payback shows under its expense
@@ -3344,6 +3370,12 @@ function settleForm(id, preset, replaces){
     if(!isDate(date)) return fail("sdate","Pick a valid date.");
     if(!HUMANS.includes(paidBy)) return fail("samt","Pick who paid.");
     const data = {kind:"settle", amount, date, paidBy, shared:false, categoryId:null, note: val(form, "smemo").slice(0, 80)};
+    if(!t){
+      const dup = dupOf(data); if(dup && warnOnce(form, "dup" + dup.id, "samt", dupMsg(dup), dup.id)) return;
+      const nb = bal + (paidBy === "charlie" ? -amount : amount), owes = paidBy === "sam" ? Math.max(0, -bal) : Math.max(0, bal);
+      if(amount > owes + 100 && Math.sign(nb) === (paidBy === "sam" ? 1 : -1) && warnOnce(form, "over" + paidBy + amount, "samt",
+        `${owes ? `${nameOf(paidBy)} only owes ${money(owes)} right now` : `${nameOf(paidBy)} doesn't owe anything right now`}, so this would leave ${nameOf(other(paidBy))} owing ${money(Math.abs(nb))}. If that's right, tap Save again.`)) return;
+    }
     if(t) Object.assign(t, data); else state.budget.txns.push(Object.assign({id:uid(), billId:null}, data, settleForm.via ? {source:settleForm.via} : {}));
     if(!t && replaces) removeBy(state.budget.txns, replaces);   // a payback that was really a payment between you
     settleForm.via = null;
@@ -3359,6 +3391,7 @@ function settleVenmo(){
   if(!vu){ toast(`Add ${nameOf(other(paidBy))}'s Venmo username in ${state.budget.pigName}'s settings first.`); return; }
   const link = venmoLink(vu, amount, val(form, "smemo") || settleMemo());
   settleForm.via = "venmo"; form.requestSubmit();
+  if(document.contains(form)){ settleForm.via = null; return; }   // a warning is showing; nothing recorded yet
   window.open(link, "_blank", "noopener");
 }
 function catForm(id){
@@ -3450,6 +3483,41 @@ function paydayForm(id){
   const sync = () => { const c = val($("#sheetForm"), "pcycle"); $("#pDateBox").hidden = !(c === "weekly" || c === "biweekly"); $("#pDaysBox").hidden = !(c === "semimonthly" || c === "monthly"); $("#pDay2Wrap").hidden = c !== "semimonthly"; };
   $("#pcycle").addEventListener("change", sync); sync();
 }
+// Spending that might already be this bill: logged from it in the last 20 days, or the same amount within a week
+function billDup(b){
+  const t0 = todayStr();
+  return state.budget.txns.find(t => !t.cancelled && t.kind === "expense" && isDate(t.date) && ((t.billId === b.id && Math.abs(diffDays(t.date, t0)) <= 20) || (t.amount === b.amount && Math.abs(diffDays(t.date, t0)) <= 7))) || null;
+}
+function billDupSheet(b, d){
+  openSheet(`Already logged ${b.name}?`, `
+    <p style="margin:0">“${esc(txLabel(d))}” for ${money(d.amount)} is already in your spending (${esc(niceDate(d.date))}, ${esc(nameOf(d.paidBy))}${d.shared ? ", shared" : ""}).</p>
+    <p class="small muted" style="margin:0">Marking the bill paid moves it to the next due date. Logging it again adds another ${money(b.amount)}.</p>
+    <div class="actions" style="flex-wrap:wrap"><div class="r" style="flex-wrap:wrap">
+      <button type="button" class="btn ghost" data-act="closeSheet">Cancel</button>
+      <button type="button" class="btn ghost" data-act="billAdd" data-id="${b.id}">Log it again</button>
+      <button type="button" class="btn" data-act="billSkip" data-id="${b.id}">Just mark it paid</button></div></div>`, () => {}, false);
+}
+// "Possible duplicates" card and review sheet
+function dupCardHTML(){
+  const n = dupPairs().length; if(!n) return "";
+  return `<section class="card soon-card dupcard"><span class="ic">${IC.budget}</span><div style="flex:1;min-width:0"><h3>${n === 1 ? "A possible duplicate" : `${n} possible duplicates`}</h3>
+    <p>Entries with the same amount within a few days of each other.</p>
+    <div class="actions" style="margin-top:8px;justify-content:flex-start"><button type="button" class="btn small" data-act="dupReview">Review</button></div></div></section>`;
+}
+function dupRow(t){
+  const sub = t.kind === "settle" ? `${nameOf(t.paidBy)} paid ${nameOf(other(t.paidBy))}` : t.kind === "income" ? `Income · ${nameOf(t.paidBy)}` : `${catName(t.categoryId)} · ${t.shared ? "shared" : nameOf(t.paidBy) + "'s"}${t.billId ? " · from the bill's Paid button" : ""}${t.imp ? " · imported" : ""}`;
+  return `<button type="button" class="txrow" data-act="editTxn" data-id="${t.id}"><span class="av ${t.paidBy}">${sprite(t.paidBy, "", true)}</span>
+    <span class="tb"><span class="tt">${esc(txLabel(t))}</span><span class="ts">${esc(niceDate(t.date))} · ${esc(sub)}</span></span><span class="ta ${t.kind}">${money(t.amount)}</span></button>`;
+}
+function dupSheet(){
+  const P = dupPairs();
+  openSheet(P.length ? "Possible duplicates" : "No duplicates", P.length ? `
+    <p class="small muted" style="margin:0">Each pair has the same amount within 3 days. Tap the extra one to open it and delete it, or Keep both if they're really separate.</p>
+    ${P.map(([a, b]) => `<div class="sec"><div class="glist">${dupRow(a)}${dupRow(b)}</div>
+      <div class="actions" style="justify-content:flex-end;margin-top:4px"><button type="button" class="link" data-act="dupKeep" data-id="${a.id}|${b.id}">Keep both</button></div></div>`).join("")}
+    <div class="actions"><div class="r"><button type="button" class="btn" data-act="closeSheet">Done</button></div></div>`
+    : `<p style="margin:0">Nothing looks doubled up.</p><div class="actions"><div class="r"><button type="button" class="btn" data-act="closeSheet">Done</button></div></div>`, () => {}, false);
+}
 const BUDGET_ACTIONS = {
   bmonth: id => { const n = +id; budgetMonth = n === 0 ? todayStr().slice(0, 7) : addMonthKey(curMonth(), n); render(); },
   newTxn: () => txnForm(null),
@@ -3469,6 +3537,11 @@ const BUDGET_ACTIONS = {
   editCat: id => catForm(id || null),
   editBill: id => billForm(id || null),
   editPayday: id => paydayForm(id || null),
+  billSkip: id => { closeSheet(); ACTIONS.payBill(id, null, "skip"); },
+  billAdd: id => { closeSheet(); ACTIONS.payBill(id, null, "add"); },
+  dupReview: () => { dupSheet.open = true; dupSheet(); },
+  dupKeep: id => { const [a, b] = String(id).split("|"), A = state.budget.txns.find(t => t.id === a), B = state.budget.txns.find(t => t.id === b); if(!A || !B) return;
+    B.notDup = [...new Set([...(B.notDup || []), A.id])]; save(); render(); if(dupPairs().length) dupSheet(); else { closeSheet(); toast("OK, keeping both"); } },
   gotPay: id => { const p = state.budget.paydays.find(x => x.id === id); if(!p) return;
     const t = todayStr(), a = payActual(p, p.next), prev = p.next, date = a > t ? t : a;
     const tx = {id:uid(), kind:"income", amount:p.amount, date, note:p.name, paidBy:p.who, shared:false, categoryId:null, billId:null, paydayId:p.id};
@@ -3485,10 +3558,11 @@ const BUDGET_ACTIONS = {
   pbPair: id => { const inc = state.budget.txns.find(x => x.id === id && x.kind === "income"); if(!inc) return; const c = bestPayback(inc); if(!c) return;
     inc.repays = c.t.id; delete inc.noRepay; save(); render(); toast(`Paired · “${expLabel(c.t)}” now counts as ${money(c.t.amount - repaidSoFar(c.t.id))}`, () => { delete inc.repays; save(); render(); }); },
   pbNo: id => { const inc = state.budget.txns.find(x => x.id === id && x.kind === "income"); if(!inc) return; inc.noRepay = true; save(); render(); toast("OK, it stays income", () => { delete inc.noRepay; save(); render(); }); },
-  payBill: id => { const b = state.budget.bills.find(x => x.id === id); if(!b) return;
+  payBill: (id, el, how) => { const b = state.budget.bills.find(x => x.id === id); if(!b) return;
+    if(how !== "skip" && how !== "add"){ const d = billDup(b); if(d){ billDupSheet(b, d); return; } }
     const prevDue = b.nextDue, tx = {id:uid(), kind:"expense", amount:b.amount, date:todayStr(), note:b.name, categoryId:b.categoryId, paidBy:b.paidBy, shared:b.shared, split: b.shared && b.split ? Object.assign({}, b.split) : null, billId:b.id};
-    state.budget.txns.push(tx); b.nextDue = nextBillDate(b); save(); render();
-    toast(`${b.name} paid · next ${niceDate(b.nextDue)}`, () => { state.budget.txns = state.budget.txns.filter(t => t.id !== tx.id); b.nextDue = prevDue; save(); render(); }); }
+    if(how !== "skip") state.budget.txns.push(tx); b.nextDue = nextBillDate(b); save(); render();
+    toast(`${b.name} ${how === "skip" ? "marked paid (not logged again)" : "paid"} · next ${niceDate(b.nextDue)}`, () => { state.budget.txns = state.budget.txns.filter(t => t.id !== tx.id); b.nextDue = prevDue; save(); render(); }); }
 };
 const BUDGET_DELETES = {
   delTxn: id => { const pb = state.budget.txns.filter(t => t.kind === "income" && t.repays === id); if(!removeBy(state.budget.txns, id)) return "";
@@ -3515,7 +3589,8 @@ function normalizeBudget(raw){
     txns: objs(b.txns).filter(t => isDate(t.date) && cents(t.amount) && ["expense","income","settle"].includes(t.kind)).map(t => Object.assign({}, t, {
       id: t.id ? String(t.id) : uid(), amount: cents(t.amount), paidBy: HUMANS.includes(t.paidBy) ? t.paidBy : "sam",
       categoryId: t.kind === "expense" && catIds.has(t.categoryId) ? t.categoryId : null, shared: t.kind === "expense" && !!t.shared, split: t.kind === "expense" && t.shared ? cleanSplit(t.split, cents(t.amount)) : null, note: str(t.note, 80), details: str(t.details, 500), cancelled: !!t.cancelled, billId: t.billId ? String(t.billId) : null }))
-      .map(t => { if(t.kind !== "income" || !t.repays) delete t.repays; else t.repays = String(t.repays); if(t.kind !== "income" || !t.noRepay) delete t.noRepay; else t.noRepay = true; return t; }),
+      .map(t => { if(Array.isArray(t.notDup)) t.notDup = t.notDup.map(String).slice(0, 50); else delete t.notDup;
+        if(t.kind !== "income" || !t.repays) delete t.repays; else t.repays = String(t.repays); if(t.kind !== "income" || !t.noRepay) delete t.noRepay; else t.noRepay = true; return t; }),
     bills: objs(b.bills).filter(x => str(x.name).trim() && cents(x.amount) && isDate(x.nextDue)).map(x => Object.assign({}, x, {
       id: x.id ? String(x.id) : uid(), name: str(x.name, 40).trim(), amount: cents(x.amount), cycle: BILL_CYCLES[x.cycle] ? x.cycle : "monthly",
       anchorDay: clampInt(x.anchorDay, 1, 31, +x.nextDue.slice(8)),
@@ -5012,7 +5087,7 @@ function openSheet(title, inner, onSubmit, autofocus = true){
 function fitSheet(vv, fullH){
   const sh = document.querySelector(".sheet"); if(!sh || !vv) return false;
   const kb = fullH - vv.height > 120;          // a real keyboard, not the address bar shrinking
-  if(kb){ sh.style.top = Math.round(vv.offsetTop + 8) + "px"; sh.style.bottom = "auto"; sh.style.maxHeight = Math.round(vv.height - 8) + "px"; }
+  if(kb){ sh.style.top = ""; sh.style.bottom = Math.max(0, Math.round(fullH - vv.height - vv.offsetTop)) + "px"; sh.style.maxHeight = Math.round(vv.height - 12) + "px"; }
   else { sh.style.top = ""; sh.style.bottom = ""; sh.style.maxHeight = ""; }
   const a = document.activeElement;
   if(kb && a && sh.contains(a) && a.matches && a.matches(TYPING_SEL)){
@@ -5029,7 +5104,7 @@ if(window.visualViewport){
   window.visualViewport.addEventListener("scroll", onVV);
   window.addEventListener("orientationchange", () => { sheetFullH = 0; setTimeout(onVV, 300); });
 }
-function closeSheet(){ discardPendingPdf(); $("#sheetRoot").innerHTML = ""; document.documentElement.classList.remove("sheet-open"); if(lastFocus && document.contains(lastFocus)) lastFocus.focus({preventScroll:true}); }
+function closeSheet(){ dupSheet.open = false; discardPendingPdf(); $("#sheetRoot").innerHTML = ""; document.documentElement.classList.remove("sheet-open"); if(lastFocus && document.contains(lastFocus)) lastFocus.focus({preventScroll:true}); }
 function field(id, label, input, hint){ return `<div class="field" id="f-${id}"><label for="${id}">${label}</label>${input}${hint?`<span class="hint">${hint}</span>`:""}</div>`; }
 function clearErrors(form){ form.querySelectorAll(".field.bad").forEach(f => { f.classList.remove("bad"); const e = f.querySelector(".err"); if(e) e.remove(); }); }
 function fail(id, msg){ const f = $("#f-"+id); if(!f) return; f.classList.add("bad"); f.insertAdjacentHTML("beforeend", `<span class="err" role="alert">${esc(msg)}</span>`); const i = f.querySelector("input,select,textarea"); if(i) i.focus(); }
@@ -5383,7 +5458,7 @@ function toast(msg, undo, label, ms){
   toastTimer = setTimeout(() => { $("#toastRoot").innerHTML = ""; toast.undo = null; }, ms || (undo ? 5000 : 2200));
 }
 /* ---- which version is this, and is there a newer one? ---- */
-const BUILD = "2026-10-30 · 35";
+const BUILD = "2026-10-30 · 36";
 let updateSeen = "";
 async function checkForUpdate(){
   if(!/^https?:$/.test(location.protocol) || navigator.onLine === false) return;
@@ -5482,7 +5557,7 @@ document.addEventListener("click", e => {
   const el = e.target.closest("[data-act]"); if(!el) return;
   const act = el.dataset.act;
   const [kind, id] = act.split(":");
-  if(DELETES[kind] && id){ const msg = DELETES[kind](id); save(); closeSheet(); render(); if(msg) toast(msg); return; }
+  if(DELETES[kind] && id){ const reopen = kind === "delTxn" && dupSheet.open; const msg = DELETES[kind](id); save(); closeSheet(); render(); if(msg) toast(msg); if(reopen && dupPairs().length){ dupSheet.open = true; dupSheet(); } return; }
   if(ACTIONS[act]){ e.preventDefault(); ACTIONS[act](el.dataset.id, el); }
 });
 document.addEventListener("change", e => {

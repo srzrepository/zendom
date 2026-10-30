@@ -493,6 +493,8 @@ async def test_dates(browser):
     # pay it through the UI twice
     await act(pg, "tab", "budget"); await act(pg, "btab", "spending")
     await act(pg, "payBill", "b1"); await act(pg, "payBill", "b1")
+    check("bill: a second Paid right away asks first (step 36)", "Already logged Rent?" in await ev(pg, "document.querySelector('.sheet').innerText"))
+    await act(pg, "billAdd", "b1")
     s = await stored(pg)
     check("bill: paying twice via the button goes Oct 31 -> Nov 30 -> Dec 31", s["budget"]["bills"][0]["nextDue"] == "2026-12-31" and len(s["budget"]["txns"]) == 2, s["budget"]["bills"][0]["nextDue"])
     await act(pg, "undo")
@@ -1474,8 +1476,8 @@ async def test_keyboard_sheet(browser):
     # pretend the keyboard took the bottom 340px and Safari slid the view down 120px
     await ev(pg, "document.querySelector('#tdetails').focus({preventScroll:true})")
     r = await ev(pg, """(() => { const kb = fitSheet({height: 504, offsetTop: 120}, 844); const sh = document.querySelector('.sheet'), b = sh.getBoundingClientRect(), a = document.activeElement.getBoundingClientRect();
-        return {kb, top: sh.style.top, max: sh.style.maxHeight, inView: a.top >= b.top && a.bottom <= b.bottom}; })()""")
-    check("keyboard: the sheet fits the visible part of the screen", r["kb"] and r["top"] == "128px" and r["max"] == "496px", str(r))
+        return {kb, top: sh.style.top, bottom: sh.style.bottom, max: sh.style.maxHeight, inView: a.top >= b.top && a.bottom <= b.bottom}; })()""")
+    check("keyboard: the sheet stays pinned just above the keyboard", r["kb"] and r["top"] == "" and r["bottom"] == "220px" and r["max"] == "492px", str(r))
     check("keyboard: the box you tapped is scrolled into view in the sheet", r["inView"], str(r))
     r = await ev(pg, "(() => { const kb = fitSheet({height: 800, offsetTop: 0}, 844); const sh = document.querySelector('.sheet'); return [kb, sh.style.top, sh.style.bottom, sh.style.maxHeight].join('|'); })()")
     check("keyboard: closing the keyboard (or a small address-bar change) puts the sheet back", r == "false|||", r)
@@ -1604,6 +1606,75 @@ async def test_share_payments(browser):
     await pg.context.close()
 
 
+async def test_duplicates(browser):
+    pg = await new_page(browser, clock="2026-10-30T16:00:00-07:00")
+    # Sam's Oct 30: rent typed in AND logged from the bill; her share paid twice; PG&E half paid twice
+    await ev(pg, """(() => { prefs.user = 'sam'; savePrefs(); state.budget.categories = [{id:'r', name:'Rent & utilities', limit:0}, {id:'b', name:'Bills & subscriptions', limit:0}];
+      state.budget.bills = [{id:'bill', name:'Rent', amount:360000, cycle:'monthly', nextDue:'2026-11-30', anchorDay:30, categoryId:'b', paidBy:'charlie', shared:false, autopay:false}];
+      state.budget.txns = [
+        {id:'r1', kind:'expense', amount:360000, date:'2026-10-30', categoryId:'r', paidBy:'charlie', shared:true, split:{mode:'amt', sam:150000}, note:'Rent & utilities', billId:null},
+        {id:'r2', kind:'expense', amount:360000, date:'2026-10-30', categoryId:'b', paidBy:'charlie', shared:false, note:'Rent', billId:'bill'},
+        {id:'s1', kind:'settle', amount:150000, date:'2026-10-30', paidBy:'sam', shared:false, categoryId:null, note:'Rent & utilities', billId:null},
+        {id:'s2', kind:'settle', amount:150000, date:'2026-10-30', paidBy:'sam', shared:false, categoryId:null, note:'november rent', billId:null},
+        {id:'g1', kind:'expense', amount:27143, date:'2026-10-30', categoryId:'r', paidBy:'charlie', shared:true, note:'PG&E', billId:null},
+        {id:'s3', kind:'settle', amount:13572, date:'2026-10-30', paidBy:'sam', shared:false, categoryId:null, note:'PG&E', billId:null},
+        {id:'s4', kind:'settle', amount:13572, date:'2026-10-30', paidBy:'sam', shared:false, categoryId:null, note:'Rent & utilities, PG&E', billId:null},
+        {id:'x1', kind:'settle', amount:13572, date:'2026-10-30', paidBy:'charlie', shared:false, categoryId:null, note:'other way', billId:null}];
+      budgetMonth = '2026-10'; save(); ACTIONS.tab('budget'); ACTIONS.btab('spending'); })()""")
+    check("dupes: finds the 3 doubled-up pairs (not Charlie's payment the other way)", await ev(pg, "dupPairs().map(p => p.map(t => t.id).join('+')).join()") == "r1+r2,s1+s2,s3+s4", await ev(pg, "dupPairs().map(p => p.map(t => t.id).join('+')).join()"))
+    check("dupes: a card says so", "3 possible duplicates" in await ev(pg, "document.querySelector('#view').innerText"))
+    await act(pg, "dupReview")
+    sh = await ev(pg, "document.querySelector('.sheet').innerText")
+    check("dupes: review shows the pairs, and which rent came from the bill's Paid button", "from the bill's Paid button" in sh and await ev(pg, "document.querySelectorAll('[data-act=dupKeep]').length") == 3, sh[:500])
+    # delete the bill's rent from the review: back to the list with 2 left
+    await ev(pg, "ACTIONS.editTxn('r2')"); await confirm_delete(pg)
+    check("dupes: deleting from the review goes back to it, 2 left", await ev(pg, "document.querySelector('#sheetTitle').textContent") == "Possible duplicates" and await ev(pg, "dupPairs().length") == 2)
+    await act(pg, "dupKeep", "s3|s4")
+    check("dupes: Keep both remembers the pair", await ev(pg, "dupPairs().length") == 1 and await ev(pg, "state.budget.txns.find(t => t.id === 's4').notDup.includes('s3')"))
+    await ev(pg, "ACTIONS.editTxn('s2')"); await confirm_delete(pg)
+    check("dupes: last one cleared, card gone", await ev(pg, "dupPairs().length") == 0 and "possible duplicate" not in (await ev(pg, "document.querySelector('#view').innerText")).lower())
+    await pg.reload(); await pg.wait_for_timeout(300)
+    check("dupes: kept pair stays kept after reload", await ev(pg, "dupPairs().length") == 0)
+    await ev(pg, "(() => { ACTIONS.tab('budget'); ACTIONS.btab('spending'); })()")
+    # typing the same spending again warns once
+    await act(pg, "newTxn"); await fill(pg, {"amt": "271.43", "tnote": "PG&E again"}); await submit(pg)
+    check("dupes: same amount within 3 days warns and links to the one you have", "You already have “PG&E” for $271.43 on Oct 30" in await err_text(pg) and await ev(pg, "!!document.querySelector('#f-amt [data-act=editTxn]')"))
+    await submit(pg)
+    check("dupes: Save again keeps both", await ev(pg, "state.budget.txns.filter(t => t.amount === 27143).length") == 2)
+    await act(pg, "newTxn"); await fill(pg, {"amt": "271.43", "tdate": "2026-10-20"}); await submit(pg)
+    check("dupes: 10 days apart isn't flagged", not await sheet_open(pg))
+    # Record payment: duplicate and more-than-owed
+    bal = await ev(pg, "balance()")
+    await act(pg, "settleUp")
+    await fill(pg, {"samt": "1500", "smemo": "rent again"}); await pg.locator('#sheetForm input[name=paidBy][value=sam]').check(); await submit(pg)
+    e = await err_text(pg)
+    check("dupes: paying the same amount again warns", "You already have “Rent & utilities” for $1,500.00" in e, e)
+    await submit(pg)
+    e = await err_text(pg)
+    check("dupes: then warns it's more than Sam owes", "Sam" in e and "would leave Charlie owing" in e, e)
+    await submit(pg)
+    check("dupes: a third Save records it", await ev(pg, "state.budget.txns.filter(t => t.kind === 'settle' && t.amount === 150000).length") == 2)
+    # Pay in Venmo doesn't open Venmo while a warning shows
+    await ev(pg, "(() => { state.budget.venmo = {sam:'sam-z', charlie:'charlie-p'}; save(); window.__opened = []; window.open = u => { window.__opened.push(u); return null; }; ACTIONS.settleUp(); })()")
+    await fill(pg, {"samt": "1500"}); await pg.locator('#sheetForm input[name=paidBy][value=sam]').check()
+    await act(pg, "settleVenmo")
+    check("dupes: Pay in Venmo waits while a warning is showing", await ev(pg, "window.__opened.length") == 0 and await sheet_open(pg))
+    await ev(pg, "closeSheet()")
+    # bill Paid when it's already logged
+    await act(pg, "payBill", "bill")
+    check("dupes: a bill's Paid asks when that amount was just logged", "Already logged Rent?" in await ev(pg, "document.querySelector('.sheet').innerText"))
+    n0 = await ev(pg, "state.budget.txns.length")
+    await act(pg, "billSkip", "bill")
+    check("dupes: Just mark it paid moves the due date without adding spending", await ev(pg, "state.budget.txns.length") == n0 and await ev(pg, "state.budget.bills[0].nextDue") == "2026-12-30")
+    await act(pg, "payBill", "bill"); await act(pg, "billAdd", "bill")
+    check("dupes: Log it again adds it", await ev(pg, "state.budget.txns.length") == n0 + 1)
+    await ev(pg, "(() => { state.budget.txns = state.budget.txns.filter(t => t.amount !== 360000); save(); render(); })()")
+    await act(pg, "payBill", "bill")
+    check("dupes: with nothing matching, Paid logs it straight away", not await sheet_open(pg) and await ev(pg, "state.budget.txns.filter(t => t.billId === 'bill').length") == 1)
+    check("dupes: no page errors", not pg.errors, "; ".join(pg.errors))
+    await pg.context.close()
+
+
 async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch()
@@ -1630,6 +1701,7 @@ async def main():
         await test_keyboard_sheet(browser)
         await test_paydays(browser)
         await test_share_payments(browser)
+        await test_duplicates(browser)
         await browser.close()
     failed = [r for r in results if not r[1]]
     print(f"\n{len(results) - len(failed)} of {len(results)} checks passed")
