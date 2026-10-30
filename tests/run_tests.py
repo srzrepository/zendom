@@ -15,7 +15,7 @@ def check(name, ok, detail=""):
     results.append((name, bool(ok), detail))
     print(("PASS " if ok else "FAIL ") + name + (f"  [{detail}]" if detail and not ok else ""))
 
-async def new_page(browser, storage=None, clock=None):
+async def new_page(browser, storage=None, clock=None, ticking=False):
     ctx = await browser.new_context(viewport={"width": 390, "height": 844}, timezone_id="America/Los_Angeles", accept_downloads=True)
     # block the Google Fonts request (no network in the test sandbox)
     await ctx.route("**/fonts.googleapis.com/**", lambda r: r.abort())
@@ -23,7 +23,9 @@ async def new_page(browser, storage=None, clock=None):
     pg = await ctx.new_page()
     pg.errors = []
     pg.on("pageerror", lambda e: pg.errors.append(str(e)))
-    if clock:
+    if clock and ticking:
+        await pg.clock.install(time=clock)          # time can be moved forward with pg.clock.run_for
+    elif clock:
         await pg.clock.set_fixed_time(clock)
     await pg.goto("file://" + PAGE)
     if storage is not None:
@@ -1061,43 +1063,60 @@ WRAP_SEED = """(() => {
   save(); render(); })()"""
 
 async def test_wrapup(browser):
-    pg = await new_page(browser, clock="2026-11-02T09:00:00-08:00")
+    pg = await new_page(browser, clock="2026-11-02T09:00:00-08:00", ticking=True)
     await ev(pg, WRAP_SEED)
     w = await ev(pg, "monthWrap('2026-10')")
     check("wrap-up: totals", w["spent"] == 349650 and w["income"] == 520000 and w["count"] == 3 and w["prevSpent"] == 60000, json.dumps([w["spent"], w["income"], w["count"], w["prevSpent"]]))
     who = {x["h"]: x for x in w["who"]}
     check("wrap-up: who paid what", who["sam"]["paid"] == 49650 and who["sam"]["shared"] == 18450 and who["sam"]["own"] == 31200 and who["charlie"]["paid"] == 300000 and who["charlie"]["n"] == 1, json.dumps(w["who"]))
     check("wrap-up: categories, biggest first, with over-target", [c["name"] for c in w["cats"]] == ["Rent", "Eating out", "Groceries"] and w["cats"][1]["over"] == 11200, json.dumps(w["cats"]))
-    # Sep Costco +30000; Oct rent -150000, TJ +9225, settle +50000 -> -60775 (Sam owes Charlie); Nov groceries not counted
     check("wrap-up: who owed whom at month end (later months not counted)", w["bal"] == -60775, w["bal"])
     check("wrap-up: biggest purchase", w["biggest"]["id"] == "1")
     view = lambda: ev(pg, "document.querySelector('#view').innerText")
     check("wrap-up: Today shows the card in the first days of the month", "Jeff's October wrap-up is ready" in await view())
     await act(pg, "openWrap", "2026-10")
-    sheet = await ev(pg, "document.querySelector('#sheetForm').innerText")
-    check("wrap-up: sheet says who paid and how it split", "Sam: $496.50" in sheet and "Charlie: $3,000.00" in sheet and "Sam owed Charlie $607.75 at month end" in sheet, sheet[:600])
-    check("wrap-up: Jeff compares with last month and flags overspending", "$2,896.50 more than September" in sheet and "Eating out ran $112.00 over" in sheet)
-    await ev(pg, "closeSheet()")
+    check("wrap-up: Read it opens Budget → Summary on last month", await ev(pg, "prefs.tab + '/' + prefs.budgetTab + '/' + sumRange().preset") == "budget/summary/last")
+    check("summary: Jeff crunches numbers first", await ev(pg, "!!document.querySelector('.jeffanim svg .jf9')") and "Crunching the numbers" in await view())
+    await pg.clock.run_for(2000); await pg.wait_for_timeout(100)
+    t = await view()
+    check("summary: then gives his verdict", "Crunching" not in t and "$2,896.50 more than September" in t and "Eating out ran $112.00 over" in t, t[:400])
+    check("summary: who paid and how it split", "Sam: $496.50" in t and "Charlie: $3,000.00" in t and "Sam owed Charlie $607.75 at month end" in t)
+    await ev(pg, "ACTIONS.tab('today')")
     check("wrap-up: once read, the Today card goes away (this phone)", "wrap-up is ready" not in await view())
     await ev(pg, "delete prefs.wrapSeen['2026-10']; render()")
     await act(pg, "wrapDismiss", "2026-10")
     check("wrap-up: Not now hides it too", "wrap-up is ready" not in await view())
-    # Budget: button for past months; this month only from the 25th
-    await ev(pg, "ACTIONS.tab('budget'); ACTIONS.btab('spending')")
-    check("wrap-up: no button for this month early on", not await ev(pg, "!!document.querySelector('#view [data-act=openWrap]')"))
-    await ev(pg, "ACTIONS.bmonth('-1')")
-    check("wrap-up: past month has a wrap-up button", await ev(pg, "document.querySelector('#view [data-act=openWrap]').dataset.id") == "2026-10")
+    # presets and custom dates
+    await ev(pg, "ACTIONS.tab('budget'); ACTIONS.btab('summary'); ACTIONS.sumPreset('3m')"); await pg.clock.run_for(2000)
+    r = await ev(pg, "rangeWrap(sumRange().from, sumRange().to)")
+    check("summary: last 3 months covers Sep–Nov with a month-by-month list", r["from"] == "2026-09-01" and r["to"] == "2026-11-30" and [m["spent"] for m in r["months"]] == [60000, 349650, 9900] and "Month by month" in await view(), json.dumps(r["months"]))
+    await ev(pg, "ACTIONS.sumPreset('year')"); await pg.clock.run_for(2000)
+    check("summary: this year", await ev(pg, "sumRange().from + '/' + sumRange().to") == "2026-01-01/2026-12-31")
+    await ev(pg, "ACTIONS.sumPreset('custom')"); await pg.clock.run_for(2000)
+    await pg.locator('#sumFrom').fill('2026-10-05'); await pg.wait_for_timeout(50)
+    await pg.locator('#sumTo').fill('2026-10-21'); await pg.wait_for_timeout(50); await pg.clock.run_for(2000)
+    c = await ev(pg, "rangeWrap(sumRange().from, sumRange().to)")
+    check("summary: custom dates include both ends", c["spent"] == 49650 and c["count"] == 2, json.dumps([c["spent"], c["count"]]))
+    check("summary: custom range shown in Jeff's label", "Oct 5 – Oct 21, 2026" in await view())
+    await ev(pg, "prefs.sum = {preset:'custom', from:'2027-03-01', to:'2026-11-30'}; render()"); await pg.clock.run_for(2000)
+    check("summary: From after To is swapped and explained", "Swapped the dates" in await view() and await ev(pg, "sumRange().from") == "2026-11-30")
+    await ev(pg, "prefs.sum = {preset:'custom', from:'2030-01-01', to:'2030-02-01'}; render()"); await pg.clock.run_for(2000)
+    t = await view()
+    check("summary: a range with no data doesn't break", "Nothing was logged" in t and "$0.00" in t and "NaN" not in t and "Infinity" not in t, t[:300])
+    await ev(pg, "prefs.sum = {preset:'custom', from:'', to:'nope'}; render()"); await pg.clock.run_for(2000)
+    check("summary: blank or broken dates fall back sensibly", await ev(pg, "isDate(sumRange().from) && isDate(sumRange().to)") and "NaN" not in await view())
+    await ev(pg, "state.budget.txns = []; save(); ACTIONS.sumPreset('month')"); await pg.clock.run_for(2000)
+    check("summary: no spending at all doesn't break", "NaN" not in await view() and "Nothing logged" in await view())
+    check("summary: no page errors", not pg.errors, "; ".join(pg.errors))
     await pg.context.close()
     pg = await new_page(browser, clock="2026-10-27T09:00:00-07:00")
     await ev(pg, WRAP_SEED); await ev(pg, "ACTIONS.tab('budget'); ACTIONS.btab('spending')")
     check("wrap-up: from the 25th, this month's 'so far' button", "October wrap-up so far" in await ev(pg, "document.querySelector('#view').innerText"))
-    await act(pg, "openWrap", "2026-10")
-    check("wrap-up: so-far wording", "(so far)" in await ev(pg, "document.querySelector('#sheetTitle').innerText") and "So far" in await ev(pg, "document.querySelector('#sheetForm').innerText"))
-    await ev(pg, "closeSheet(); state.budget.txns = []; save(); ACTIONS.openWrap('2026-08')")
-    check("wrap-up: an empty month says so kindly", "Nothing was logged in August" in await ev(pg, "document.querySelector('#sheetForm').innerText"))
+    await ev(pg, "ACTIONS.bmonth('-2')")
+    await act(pg, "openWrap", "2026-08")
+    check("wrap-up: an older month opens as a date range", await ev(pg, "sumRange().from + '/' + sumRange().to") == "2026-08-01/2026-08-31")
     check("wrap-up: no page errors", not pg.errors, "; ".join(pg.errors))
     await pg.context.close()
-
 
 async def test_dinner_suggestions(browser):
     pg = await new_page(browser, clock="2026-10-30T08:30:00-07:00")
