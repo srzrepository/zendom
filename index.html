@@ -2965,7 +2965,7 @@ function wrapTeaserHTML(){
 // Every entry that moves who-owes-whom, oldest first, with the running balance (+ = Charlie owes Sam).
 function oweLedger(){
   const list = state.budget.txns.filter(t => !t.cancelled && ((t.kind === "expense" && t.shared) || t.kind === "settle"))
-    .slice().sort((a, b) => a.date.localeCompare(b.date) || (a.kind === "settle") - (b.kind === "settle"));
+    .map((t, i) => [t, i]).sort((a, b) => a[0].date.localeCompare(b[0].date) || a[1] - b[1]).map(x => x[0]);   // same day: in the order they were added
   let run = 0;
   return list.map(t => {
     const eff = t.kind === "settle" ? (t.paidBy === "charlie" ? -t.amount : t.amount) : (t.paidBy === "sam" ? t.amount - samPart(t) : -samPart(t));
@@ -3164,12 +3164,15 @@ function txnForm(id, preset){
 function settleForm(id){
   const t = id ? state.budget.txns.find(x => x.id === id) : null;
   const bal = balance();
-  const d = t || {amount:Math.abs(bal), date:todayStr(), paidBy: bal > 0 ? "charlie" : "sam", note:""};
+  const d = t || {amount:Math.abs(bal), date:todayStr(), paidBy: bal > 0 ? "charlie" : "sam", note:settleMemo()};
+  const payee = other(d.paidBy), vu = (state.budget.venmo || {})[payee];
   openSheet(t ? "Edit payment" : "Record a payment", `
     <p class="small" style="margin:0">${bal === 0 && !t ? "You're even right now." : `Right now ${bal > 0 ? "Charlie owes Sam" : "Sam owes Charlie"} ${money(Math.abs(bal))}.`}</p>
     <div class="field"><span class="lab">Who paid?</span>${whoRadios("paidBy", d.paidBy)}</div>
     <div class="two">${field("samt","Amount", `<input id="samt" name="samt" inputmode="decimal" value="${esc(centsToInput(d.amount))}">`)}
     ${field("sdate","Date", `<input id="sdate" name="sdate" type="date" value="${esc(d.date)}">`)}</div>
+    ${field("smemo","Memo", `<input id="smemo" name="smemo" maxlength="80" value="${esc(d.note || "")}" placeholder="What it's for, e.g. October rent + groceries" autocomplete="off">`, t ? "" : "Pre-filled with what it covers. Change it to anything.")}
+    ${!t ? `<div id="venmoRow">${vu ? `<button type="button" class="btn ghost" data-act="settleVenmo" style="align-self:flex-start">Pay in Venmo and record it</button><span class="hint" style="display:block;margin-top:4px">Opens Venmo with the same amount and memo.</span>` : `<span class="hint">Add your Venmo usernames in ${esc(state.budget.pigName)}'s settings to pay from here.</span>`}</div>` : ""}
     ${footer(t ? "delTxn:" + t.id : "")}`,
   form => {
     const amount = parseMoney(val(form,"samt")), date = val(form,"sdate");
@@ -3177,10 +3180,22 @@ function settleForm(id){
     if(amount === null) return fail("samt","Enter an amount like 20 or 42.50.");
     if(!isDate(date)) return fail("sdate","Pick a valid date.");
     if(!HUMANS.includes(paidBy)) return fail("samt","Pick who paid.");
-    const data = {kind:"settle", amount, date, paidBy, shared:false, categoryId:null, note:""};
-    if(t) Object.assign(t, data); else state.budget.txns.push(Object.assign({id:uid(), billId:null}, data));
+    const data = {kind:"settle", amount, date, paidBy, shared:false, categoryId:null, note: val(form, "smemo").slice(0, 80)};
+    if(t) Object.assign(t, data); else state.budget.txns.push(Object.assign({id:uid(), billId:null}, data, settleForm.via ? {source:settleForm.via} : {}));
+    settleForm.via = null;
     save(); closeSheet(); render(); toast("Payment recorded");
   });
+}
+// Venmo: record the payment, then open Venmo with the same amount and memo
+function settleVenmo(){
+  const form = $("#sheetForm"); if(!form) return;
+  const amount = parseMoney(val(form, "samt")), paidBy = (form.querySelector("input[name=paidBy]:checked") || {}).value;
+  if(amount === null){ fail("samt", "Enter an amount like 20 or 42.50."); return; }
+  const vu = (state.budget.venmo || {})[other(paidBy)];
+  if(!vu){ toast(`Add ${nameOf(other(paidBy))}'s Venmo username in ${state.budget.pigName}'s settings first.`); return; }
+  const link = venmoLink(vu, amount, val(form, "smemo") || settleMemo());
+  settleForm.via = "venmo"; form.requestSubmit();
+  window.open(link, "_blank", "noopener");
 }
 function catForm(id){
   const c = id ? state.budget.categories.find(x => x.id === id) : null; if(id && !c) return;
@@ -3233,6 +3248,7 @@ const BUDGET_ACTIONS = {
   newTxn: () => txnForm(null),
   editTxn: id => txnForm(id),
   settleUp: () => settleForm(null),
+  settleVenmo: () => settleVenmo(),
   oweDetail: () => oweSheet(false),
   oweAll: () => oweSheet(true),
   spendWho: id => { prefs.spendWho = HUMANS.includes(id) ? id : ""; savePrefs(); render(); },
@@ -3625,8 +3641,17 @@ function importChange(e){
   keepScroll(); renderImport(); return true;
 }
 // optional "Pay in Venmo" link for settling up (unofficial link format; the person still records the payment here)
-function venmoLink(user, cents){
-  return `https://venmo.com/${encodeURIComponent(user)}?txn=pay&amount=${(cents/100).toFixed(2)}&note=${encodeURIComponent("zen·dom settle up")}`;
+// What a payment would cover: the shared costs since you were last even, newest first, in a few words.
+function settleMemo(){
+  const L = oweLedger(); let start = 0;
+  for(let i = L.length - 1; i >= 0; i--) if(Math.round(L[i].run) === 0){ start = i + 1; break; }
+  const names = [...new Set(L.slice(start).filter(x => x.t.kind === "expense").reverse().map(x => x.t.note || catName(x.t.categoryId)))];
+  if(!names.length) return "zen·dom settle up";
+  let out = ""; for(const n of names){ const next = out ? out + ", " + n : n; if(Array.from(next).length > 55){ out += ", …"; break; } out = next; }
+  return out;
+}
+function venmoLink(user, cents, memo){
+  return `https://venmo.com/${encodeURIComponent(user)}?txn=pay&amount=${(cents/100).toFixed(2)}&note=${encodeURIComponent(memo || settleMemo())}`;
 }
 function jeffSettingsForm(){
   const b = state.budget, v = b.venmo || {};
@@ -5089,7 +5114,7 @@ function toast(msg, undo, label, ms){
   toastTimer = setTimeout(() => { $("#toastRoot").innerHTML = ""; toast.undo = null; }, ms || (undo ? 5000 : 2200));
 }
 /* ---- which version is this, and is there a newer one? ---- */
-const BUILD = "2026-10-30 · 30";
+const BUILD = "2026-10-30 · 31";
 let updateSeen = "";
 async function checkForUpdate(){
   if(!/^https?:$/.test(location.protocol) || navigator.onLine === false) return;

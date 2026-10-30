@@ -1305,6 +1305,37 @@ async def test_splits(browser):
     await pg.context.close()
 
 
+async def test_payment_memo(browser):
+    pg = await new_page(browser, clock="2026-10-30T13:00:00-07:00")
+    await ev(pg, """(() => { state.budget.categories = [{id:'g', name:'Groceries', limit:0}]; state.budget.venmo = {sam:'sam-z', charlie:'charlie-p'}; state.budget.txns = [
+        {id:'1', kind:'expense', amount:8000, date:'2026-10-02', categoryId:'g', paidBy:'charlie', shared:true, note:'Costco', billId:null},
+        {id:'2', kind:'expense', amount:2000, date:'2026-10-05', categoryId:'g', paidBy:'charlie', shared:true, note:'Cat food', billId:null}];
+      save(); ACTIONS.tab('budget'); ACTIONS.btab('spending'); })()""")
+    await act(pg, "settleUp")
+    check("payment memo: pre-filled with what it covers", await ev(pg, "document.querySelector('#smemo').value") == "Cat food, Costco")
+    await fill(pg, {"smemo": "October groceries"}); await submit(pg)
+    t = [x for x in (await stored(pg))["budget"]["txns"] if x["kind"] == "settle"][0]
+    check("payment memo: saved with the payment", t["note"] == "October groceries" and t["amount"] == 5000 and t["paidBy"] == "sam")
+    check("payment memo: shows in the list", "October groceries" in await ev(pg, "document.querySelector('#view').innerText"))
+    await ev(pg, f"ACTIONS.editTxn('{t['id']}')")
+    check("payment memo: editing keeps it", await ev(pg, "document.querySelector('#smemo').value") == "October groceries")
+    await ev(pg, "closeSheet(); state.budget.txns.push({id:'3', kind:'expense', amount:4000, date:'2026-10-30', categoryId:'g', paidBy:'charlie', shared:true, note:'Tacos', billId:null}); save(); render()")
+    # Pay in Venmo: records it and opens Venmo with the same amount + memo
+    await ev(pg, "window.__opened = []; window.open = (u) => { window.__opened.push(u); return null; }; ACTIONS.settleUp()")
+    check("venmo: memo starts with what's new since you were even", await ev(pg, "document.querySelector('#smemo').value") == "Tacos")
+    await act(pg, "settleVenmo"); await pg.wait_for_timeout(100)
+    u = await ev(pg, "window.__opened[0] || ''")
+    check("venmo: opens Venmo to Charlie with the amount and memo", u.startswith("https://venmo.com/charlie-p?txn=pay&amount=20.00&note=Tacos"), u)
+    v = [x for x in (await stored(pg))["budget"]["txns"] if x["kind"] == "settle" and x["note"] == "Tacos"]
+    check("venmo: the payment is recorded too (marked as Venmo)", len(v) == 1 and v[0].get("source") == "venmo" and await ev(pg, "balance()") == 0)
+    # a Venmo statement later shows the same payment: it's recognized
+    csv = chr(10).join(["Username,ID,Datetime,Type,Status,Note,From,To,Amount (total)", ",1,2026-10-30T13:05:00,Payment,Complete,Tacos,Sam Z,Charlie P,- $20.00", ""])
+    dup = await pg.evaluate("c => (buildImport(c, 'venmo.csv').rows || []).map(x => x.dup)", csv)
+    check("venmo: importing the Venmo statement later doesn't double count it", dup and dup[0] and "Tacos" in dup[0], json.dumps(dup))
+    check("payment memo: no page errors", not pg.errors, "; ".join(pg.errors))
+    await pg.context.close()
+
+
 async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch()
@@ -1326,6 +1357,7 @@ async def main():
         await test_person_view(browser)
         await test_pdf_statements(browser)
         await test_splits(browser)
+        await test_payment_memo(browser)
         await browser.close()
     failed = [r for r in results if not r[1]]
     print(f"\n{len(results) - len(failed)} of {len(results)} checks passed")
