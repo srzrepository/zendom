@@ -1,7 +1,6 @@
 import json, sys
-src = open('chibi.py').read().split('if __name__ == "__main__":')
-exec(src[0] + src[1].split('\n# ---- filters ----')[1])
-KEYS = {"normal":"normal","grin":"grin","cat":"smug","squint":"squint","blank":"blank","sweat":"sweat","grumpy":"grumpy","cry":"cry","sleepy":"sleepy","shock":"shock","sparkle":"sparkle","love":"love","dog":"wag","cat2":"slit"}
+from chibi import *
+KEYS = {"normal":"normal","grin":"grin","cat":"smug","squint":"squint","blank":"blank","sweat":"sweat","grumpy":"grumpy","cry":"cry","sleepy":"sleepy","shock":"shock","sparkle":"sparkle","love":"love","ahoge":"ahoge","burger":"burger","mask":"mask","dog":"wag","cat2":"slit"}
 CH = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789#$%&*+-=?@^~"
 def px(im): 
     a = im.load(); return [[None if a[x,y][3] == 0 else '#%02x%02x%02x' % a[x,y][:3] for x in range(N)] for y in range(N)]

@@ -776,7 +776,7 @@ async def test_status(browser):
     # a face with no words is a status too; every face draws; tail wag animates
     await ev(pg, "ACTIONS.tab('today')"); await act(pg, "setStatus")
     ftxt = await ev(pg, "document.querySelector('#sheetForm').innerText")
-    check("faces: all 14 offered, with the renamed ones", await ev(pg, "document.querySelectorAll('#sheetForm input[name=sface]').length") == 14 and all(n in ftxt for n in ("Normal style", "Tail wag", "Doggy world")))
+    check("faces: all 17 offered, with the renamed and new ones", await ev(pg, "document.querySelectorAll('#sheetForm input[name=sface]').length") == 17 and all(n in ftxt for n in ("Normal style", "Tail wag", "Doggy world", "Idiot hair", "Hamburger", "Muggin'")))
     await pg.locator('#sheetForm label', has_text="Tail wag").click(); await fill(pg, {"stext": ""}); await submit(pg)
     st = (await stored(pg))["people"]["sam"]["status"]
     check("faces: a face alone saves", st["face"] == "wag" and st["text"] == "", json.dumps(st))

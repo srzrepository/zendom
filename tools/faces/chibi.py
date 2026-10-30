@@ -161,18 +161,34 @@ def _(d, p):
 def face(k, key):
     im, d, p = base(k); E[key][1](d, p); glasses(d, p, k); return im
 
-if __name__ == "__main__":
-    sc, keys = 4, list(E); cell = N*sc
-    font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 22)
-    sheet = Image.new("RGB", (6*(cell+16)+16, 4*(cell+46)+16), "#f3dca6"); dr = ImageDraw.Draw(sheet)
-    for r, k in enumerate(["sam", "charlie"]):
-        for i, key in enumerate(keys):
-            row = r*2 + i//6; col = i % 6
-            x, y = 16 + col*(cell+16), 16 + row*(cell+46)
-            dr.rectangle([x, y, x+cell-1, y+cell-1], fill="#e9c98a")
-            f = face(k, key).resize((cell, cell), Image.NEAREST); sheet.paste(f, (x, y), f)
-            dr.text((x+cell//2, y+cell+22), E[key][0], fill="#4a2610", font=font, anchor="mm")
-    sheet.save("chibi.png"); print(sheet.size)
+# ---- three more faces ----
+@expr("ahoge", "Idiot hair")
+def _(d, p):
+    # one silly strand sticking up out of the top of the head, plus a happy dopey look
+    brows(d, p, "up")
+    for cx, cy in (LE, RE): d.rectangle([cx-1, cy-1, cx+1, cy+1], fill=p["eye"])
+    d.pieslice([28, 41, 36, 48], 0, 180, fill=p["mouth"]); blush(d, p)
+@expr("burger", "Hamburger")
+def _(d, p):
+    brows(d, p, "up")
+    for cx, cy in (LE, RE):
+        d.rectangle([cx-3, cy-4, cx+3, cy+4], fill=p["eye"]); d.rectangle([cx-2, cy-3, cx-1, cy-2], fill=FX["white"]); d.point((cx+1, cy+2), fill=FX["white"])
+    d.ellipse([26, 40, 37, 50], fill=FX["dark"]); d.rectangle([28, 46, 35, 49], fill=p["tongue"])   # big open mouth
+    d.line([(35, 48), (35, 55)], fill=FX["tear"]); d.rectangle([34, 55, 36, 57], fill=FX["tear"])   # drool
+    # a little floating burger
+    bx, by = 49, 5
+    d.pieslice([bx, by, bx+12, by+8], 180, 360, fill="#d9963e"); d.point((bx+4, by+2), fill="#fff3c4"); d.point((bx+8, by+1), fill="#fff3c4")
+    d.rectangle([bx, by+4, bx+12, by+5], fill="#5bbf4a"); d.rectangle([bx, by+6, bx+12, by+7], fill="#6b3a1f"); d.rectangle([bx, by+8, bx+12, by+9], fill="#d9963e")
+@expr("mask", "Muggin'")
+def _(d, p):
+    K, K2 = "#1b1b1f", "#2f2f36"
+    d.ellipse([10, 3, 53, 52], fill=K); d.rectangle([12, 30, 51, 54], fill=K)          # balaclava over the head
+    d.line([(20, 8), (16, 20)], fill=K2); d.line([(43, 8), (47, 20)], fill=K2); d.line([(31, 4), (31, 10)], fill=K2)
+    d.rounded_rectangle([15, 27, 48, 38], 3, fill=p["skin"])                            # eye hole
+    d.ellipse([27, 40, 36, 48], fill=p["skin"])                                         # mouth hole
+    d.line([(LE[0]-3, 29), (LE[0]+3, 30)], fill=p["brow"]); d.line([(RE[0]-3, 30), (RE[0]+3, 29)], fill=p["brow"])
+    for cx, cy in (LE, RE): d.line([(cx-3, cy-1), (cx+3, cy-1)], fill=p["eye"]); d.rectangle([cx-1, cy, cx+1, cy+2], fill=p["eye"])
+    d.line([(29, 44), (34, 45)], fill=p["mouth"])
 
 # ---- filters ----
 DOG = dict(ear="#8a5a34", ear2="#6b4325", inner="#e8a3a3", snout="#f2d2ae", nose="#1e1410", tongue="#ff7f96", tail="#8a5a34", tail2="#b07a4c")
@@ -209,6 +225,25 @@ def _(d, p):
 
 _face_plain = face
 def face(k, key, frame=0):
+    if key == "ahoge":   # shift down to make room, then the silly strand sticks up out of the head
+        im = _face_plain(k, key); out = Image.new("RGBA", (N, N), (0,0,0,0)); out.alpha_composite(im, (0, 6))
+        d = ImageDraw.Draw(out); hair = PAL[k]["hair"]
+        d.line([(31, 14), (29, 8), (30, 3), (34, 1), (39, 2), (42, 5), (42, 9)], fill=hair, width=2)
+        return out
     if key != "dog": return _face_plain(k, key)
     back = Image.new("RGBA", (N, N), (0,0,0,0)); dog_tail(ImageDraw.Draw(back), frame)
     front = _face_plain(k, key); back.alpha_composite(front); return back
+
+if __name__ == "__main__":
+    sc, keys = 4, list(E); cell = N*sc
+    font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 22)
+    sheet = Image.new("RGB", (6*(cell+16)+16, 4*(cell+46)+16), "#f3dca6"); dr = ImageDraw.Draw(sheet)
+    for r, k in enumerate(["sam", "charlie"]):
+        for i, key in enumerate(keys):
+            row = r*2 + i//6; col = i % 6
+            x, y = 16 + col*(cell+16), 16 + row*(cell+46)
+            dr.rectangle([x, y, x+cell-1, y+cell-1], fill="#e9c98a")
+            f = face(k, key).resize((cell, cell), Image.NEAREST); sheet.paste(f, (x, y), f)
+            dr.text((x+cell//2, y+cell+22), E[key][0], fill="#4a2610", font=font, anchor="mm")
+    sheet.save("chibi.png"); print(sheet.size)
+
