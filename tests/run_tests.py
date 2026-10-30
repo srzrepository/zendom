@@ -1238,6 +1238,9 @@ async def test_pdf_statements(browser):
     check("pdf import: bank columns decide money in/out; balances skipped", got == [("2026-09-18", "PG&E UTILITY BILL", -8420), ("2026-10-01", "PAYROLL DIRECT DEP EXAMPLE CO", 220181), ("2026-10-02", "ONLINE TRANSFER TO SAVINGS", -50000), ("2026-10-05", "EXAMPLE CARD AUTOPAY PAYMENT", -35000), ("2026-10-09", "FARMERS MARKET", -2350)], json.dumps(got))
     r = await pg.evaluate("async b => { const bin = atob(b), u = new Uint8Array(bin.length); for(let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return statementRows(await pdfLines(u.buffer)); }", __import__("base64").b64encode(open(F + "card_jan.pdf", "rb").read()).decode())
     check("pdf import: a December line on a January statement gets last year", [x["date"] for x in r["rows"]] == ["2026-12-20", "2027-01-05"], json.dumps(r["rows"]))
+    r = await pg.evaluate("async b => { const bin = atob(b), u = new Uint8Array(bin.length); for(let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return statementRows(await pdfLines(u.buffer)); }", __import__("base64").b64encode(open(F + "card_cashback.pdf", "rb").read()).decode())
+    got = [(x["date"], x["desc"], x["cents"]) for x in r["rows"]]
+    check("pdf import: a cash-back column before Amount isn't mistaken for the amount", got == [("2026-09-30", "ACH Deposit Internet transfer from account ending in 0000", 40000), ("2026-09-02", "SQ *EXAMPLE CAFE 12 MAIN ST PALO ALTO", -4950), ("2026-09-05", "EXAMPLE HARDWARE 7 ELM ST MENLO PARK", -2400)], json.dumps(got))
     # not a statement / not a PDF
     await ev(pg, "ACTIONS.importCsv()")
     await pg.locator('#csvFile').set_input_files(files=[{"name": "fake.pdf", "mimeType": "application/pdf", "buffer": b"hello"}]); await pg.wait_for_timeout(300)

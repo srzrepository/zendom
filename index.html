@@ -3293,7 +3293,7 @@ function statementRows(lines){
   const today = todayStr();
   const yearFor = (m, d) => { if(end) return m > end[1] ? end[0] - 1 : end[0];
     const y = +today.slice(0, 4), iso = `${y}-${pad(m)}-${pad(d)}`; return iso > today ? y - 1 : y; };
-  let mode = "", colOut = null, colIn = null, colBal = null;
+  let mode = "", colOut = null, colIn = null, colBal = null, colAmt = null, colSkip = [];
   const rows = [];
   const dateAt = t => {
     let m = /^(\d{1,2})[\/-](\d{1,2})(?:[\/-](\d{2,4}))?\b\s*/.exec(t);
@@ -3308,6 +3308,8 @@ function statementRows(lines){
     if(!dt){
       // column headings (Withdrawals / Deposits / Balance) and section headings (Purchases, Payments and Credits...)
       l.items.forEach(i => { const w = i.s.toLowerCase();
+        if(/daily cash|cash ?back|rewards?|points|miles/.test(w)){ colSkip.push(i.x2); return; }
+        if(/^(transaction )?amount( \(\$\))?$|^amount\b/.test(w)) colAmt = i.x2;
         if(/withdraw|debits?$|money out|subtractions/.test(w)) colOut = i.x2;
         else if(/deposit|credits?$|money in|additions/.test(w)) colIn = i.x2;
         else if(/^balance$|daily balance/.test(w)) colBal = i.x2; });
@@ -3326,7 +3328,9 @@ function statementRows(lines){
       pick = amts.find(a => near(colOut, a)); if(pick) dir = "out";
       else { pick = amts.find(a => near(colIn, a)); if(pick) dir = "in"; }
     }
-    if(!pick){ const usable = amts.filter(a => !near(colBal, a)); pick = (usable.length > 1 && !isCard ? usable[0] : usable[0]) || amts[0]; }
+    const skipCol = a => colSkip.some(c => Math.abs(a.x2 - c) < 30) || /%$/.test(a.s);
+    if(!pick && colAmt !== null) pick = amts.find(a => near(colAmt, a)) || null;
+    if(!pick){ const usable = amts.filter(a => !near(colBal, a) && !skipCol(a)); pick = (isCard ? usable[usable.length - 1] : usable[0]) || amts[amts.length - 1]; }
     let cents = amtCents(pick.s);
     if(!dir){
       if(cents < 0) dir = isCard ? "in" : "out";                         // a minus on a card statement is a payment/credit
@@ -3336,7 +3340,8 @@ function statementRows(lines){
     const desc = rest.slice(0, rest.indexOf(pick.s) >= 0 ? rest.indexOf(pick.s) : undefined).replace(AMT_RE, "").replace(/\s+/g, " ").trim().replace(/\s+-?\$?\d[\d,]*\.\d{2}$/, "");
     const y = dt.y || yearFor(dt.mo, dt.d), date = `${y}-${pad(dt.mo)}-${pad(dt.d)}`;
     if(!isDate(date)) return;
-    rows.push({date, desc: desc || "Statement line", cents: dir === "out" ? -Math.abs(cents) : Math.abs(cents)});
+    const tidy = desc.replace(/\s+\d{1,2}%?$/, "").replace(/\s*\d{5}(-\d{4})?\s+[A-Z]{2}\s+USA$/, "").replace(/\s+[A-Z]{2}\s+USA$/, "").trim();
+    rows.push({date, desc: tidy || desc || "Statement line", cents: dir === "out" ? -Math.abs(cents) : Math.abs(cents)});
   });
   return {rows, isCard, end};
 }

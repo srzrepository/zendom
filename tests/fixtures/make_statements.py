@@ -42,4 +42,23 @@ card("card_oct.pdf", "10/28/2026", "09/29/2026",
 card("card_jan.pdf", "01/14/2027", "12/15/2026",
      [("12/20", "12/21", "HOLIDAY GIFT SHOP", "42.00"), ("01/05", "01/06", "CORNER BAKERY", "12.25")], [])
 checking("checking.pdf")
+def cashback(path):
+    """card with a cash-back column before Amount (like Apple Card's Daily Cash)"""
+    c = canvas.Canvas(path, pagesize=letter); W, H = letter; y = H - 60
+    c.setFont("Helvetica-Bold", 12); c.drawString(36, y, "Example Card Statement"); c.setFont("Helvetica", 8); c.drawRightString(575, y, "Sep 1 - Sep 30, 2026"); y -= 30
+    c.drawString(36, y, "Your September Balance  $73.50   Minimum Payment Due $25.00   Payment Due By Oct 31, 2026"); y -= 30
+    c.setFont("Helvetica-Bold", 10); c.drawString(36, y, "Payments"); y -= 16
+    c.setFont("Helvetica", 8); c.drawString(37, y, "Date"); c.drawString(106, y, "Description"); c.drawRightString(576, y, "Amount"); y -= 16
+    c.drawString(36, y, "09/30/2026"); c.drawString(105, y, "ACH Deposit Internet transfer from account ending in 0000"); c.drawRightString(575, y, "-$400.00"); y -= 16
+    c.drawString(36, y, "Total payments for this period"); c.drawRightString(575, y, "-$400.00"); y -= 30
+    c.setFont("Helvetica-Bold", 10); c.drawString(36, y, "Transactions"); y -= 16
+    c.setFont("Helvetica", 8); c.drawString(37, y, "Date"); c.drawString(106, y, "Description"); c.drawString(416, y, "Daily Cash"); c.drawRightString(576, y, "Amount"); y -= 18
+    for d, desc, pct, cash, amt in (("09/02/2026", "SQ *EXAMPLE CAFE 12 MAIN ST PALO ALTO 94301 CA USA", "2%", "$0.99", "$49.50"),
+                                     ("09/05/2026", "EXAMPLE HARDWARE 7 ELM ST MENLO PARK 94025 CA USA", "2%", "$0.48", "$24.00")):
+        c.drawString(36, y, d); c.drawString(105, y, desc); c.drawString(415, y, pct); c.drawString(446, y, cash); c.drawRightString(575, y, amt); y -= 12
+        c.drawString(105, y, "3% Daily Cash at Example"); c.drawString(416, y, "1%"); c.drawString(446, y, "$0.24"); y -= 14
+    c.drawString(36, y, "Total Daily Cash this month"); c.drawString(446, y, "$1.47"); y -= 14
+    c.drawString(36, y, "Total charges, credits and returns"); c.drawRightString(575, y, "$73.50")
+    c.save()
+cashback("card_cashback.pdf")
 print("ok")
