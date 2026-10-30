@@ -372,6 +372,12 @@ input[type=search]{border:1.5px solid var(--line);background:var(--surface);bord
 .stat{background:var(--surface);border-radius:18px;box-shadow:var(--shadow);padding:12px 14px;display:flex;flex-direction:column;gap:2px;min-width:0}
 .stat b{font-size:1.35rem;font-family:var(--f-display);font-weight:500;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
 .settle{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.owebtn{border:0;background:transparent;padding:0;text-align:left;color:inherit;font:inherit;cursor:pointer}
+.owebtn u{text-decoration-thickness:2px;text-underline-offset:3px}
+.owerow{display:grid;grid-template-columns:1fr auto;gap:2px 10px;padding:9px 0;border-top:1px solid var(--line)}
+.owerow:first-child{border-top:0}
+.owerow .ot{font-weight:600;min-width:0;overflow-wrap:anywhere}.owerow .os{grid-column:1;font-size:.82rem;color:var(--muted)}
+.owerow .ov{text-align:right;font-variant-numeric:tabular-nums;font-weight:600}.owerow .or{grid-column:2;text-align:right;font-size:.8rem;color:var(--muted);font-variant-numeric:tabular-nums}
 .catrow{display:grid;grid-template-columns:1fr auto;gap:4px 10px;align-items:center;width:100%;border:0;border-top:1px solid var(--line);background:transparent;text-align:left;padding:10px 14px}
 .catrow:first-child{border-top:0}
 .catrow .cn{font-weight:600;min-width:0;overflow-wrap:anywhere}
@@ -2791,7 +2797,7 @@ function billInfo(b){
 function balance(){
   let b = 0;
   state.budget.txns.forEach(t => { if(t.cancelled) return;
-    if(t.kind === "expense" && t.shared) b += (t.paidBy === "sam" ? 1 : -1) * t.amount / 2;
+    if(t.kind === "expense" && t.shared) b += t.paidBy === "sam" ? t.amount - samPart(t) : -samPart(t);
     if(t.kind === "settle") b += (t.paidBy === "charlie" ? -1 : 1) * t.amount;
   });
   return Math.round(b);
@@ -2808,14 +2814,40 @@ function payBackHTML(me){
     <h3>Pay ${esc(nameOf(o.to))} back ${money(o.cents)}</h3><p>Your half of shared spending. This goes away when you record the payment.</p>
     <div class="actions" style="margin-top:8px;justify-content:flex-start">${v ? `<a class="btn ghost small" href="${esc(venmoLink(v, o.cents))}" target="_blank" rel="noopener">Venmo</a>` : ""}
       <button type="button" class="btn small" data-act="settleUp">I paid</button>
-      <button type="button" class="link" data-act="goTo" data-id="budget/spending">See spending</button></div></div></section>`;
+      <button type="button" class="link" data-act="oweDetail">What's it for?</button></div></div></section>`;
 }
 /* ---------- Jeff's month-end wrap-up ---------- */
 // Who owed whom after everything dated up to the end of a month (same 50/50 rule as balance()).
+// Sam's part of a shared cost (cents; may be x.5 for an even 50/50 split, rounded where shown)
+function samPart(t){
+  const sp = t.split;
+  if(sp && sp.mode === "amt") return Math.max(0, Math.min(t.amount, Math.round(sp.sam)));
+  if(sp && sp.mode === "pct") return Math.round(t.amount * Math.max(0, Math.min(100, sp.sam)) / 100);
+  return t.amount / 2;
+}
+// What one person's part of an expense is
+function shareOf(t, who){
+  if(t.kind !== "expense") return 0;
+  if(!t.shared) return t.paidBy === who ? t.amount : 0;
+  const s = samPart(t); return who === "sam" ? s : t.amount - s;
+}
+function splitLabel(t){
+  if(!t.shared) return "";
+  const s = samPart(t), sp = t.split;
+  if(!sp || (sp.mode === "pct" && sp.sam === 50)) return "shared";
+  return sp.mode === "pct" ? `shared ${Math.round(sp.sam)}/${100 - Math.round(sp.sam)}` : `shared · ${nameOf("sam")} ${money(Math.round(s))}, ${nameOf("charlie")} ${money(t.amount - Math.round(s))}`;
+}
+function cleanSplit(sp, amount){
+  if(!sp || typeof sp !== "object") return null;
+  const v = Number(sp.sam); if(!isFinite(v)) return null;
+  if(sp.mode === "pct") return v === 50 ? null : {mode:"pct", sam: Math.max(0, Math.min(100, Math.round(v * 10) / 10))};
+  if(sp.mode === "amt") return {mode:"amt", sam: Math.max(0, Math.min(amount, Math.round(v)))};
+  return null;
+}
 function balanceUntil(day){
   let b = 0;
   state.budget.txns.forEach(t => { if(t.date > day || t.cancelled) return;
-    if(t.kind === "expense" && t.shared) b += (t.paidBy === "sam" ? 1 : -1) * t.amount / 2;
+    if(t.kind === "expense" && t.shared) b += t.paidBy === "sam" ? t.amount - samPart(t) : -samPart(t);
     if(t.kind === "settle") b += (t.paidBy === "charlie" ? -1 : 1) * t.amount; });
   return Math.round(b);
 }
@@ -2835,11 +2867,11 @@ function rangeWrap(from, to, monthKey){
   const who = HUMANS.map(h => { const mine = exp.filter(t => t.paidBy === h), paid = mine.reduce((a, t) => a + t.amount, 0), shared = mine.filter(t => t.shared).reduce((a, t) => a + t.amount, 0);
     const bc = {}; mine.forEach(t => { const n = t.categoryId ? catName(t.categoryId) : "Uncategorized"; bc[n] = (bc[n] || 0) + t.amount; });
     return {h, paid, n: mine.length, shared, own: paid - shared, top: Object.entries(bc).sort((a, b) => b[1] - a[1]).slice(0, 3)}; });
-  const sharedTotal = exp.filter(t => t.shared).reduce((a, t) => a + t.amount, 0);
+  const sharedTotal = exp.filter(t => t.shared).reduce((a, t) => a + t.amount, 0), sharedSam = exp.filter(t => t.shared).reduce((a, t) => a + samPart(t), 0);
   const biggest = exp.slice().sort((a, b) => b.amount - a.amount)[0] || null;
   const sum = l => l.reduce((a, t) => a + t.amount, 0);
   const months = []; for(let k = from.slice(0, 7); k <= to.slice(0, 7) && months.length < 120; k = addMonthKey(k, 1)) months.push({k, spent: sum(exp.filter(t => t.date.slice(0, 7) === k))});
-  return {from, to, days, spent: sum(exp), income: sum(tx.filter(t => t.kind === "income")), prevSpent: sum(prevExp), prevFrom: pFrom, prevTo: pTo, cats, who, sharedTotal, biggest,
+  return {from, to, days, spent: sum(exp), income: sum(tx.filter(t => t.kind === "income")), prevSpent: sum(prevExp), prevFrom: pFrom, prevTo: pTo, cats, who, sharedTotal, sharedSam, biggest,
     count: exp.length, bal: balanceUntil(to), settled: sum(tx.filter(t => t.kind === "settle")), months, partial: to >= todayStr() && from <= todayStr()};
 }
 function wrapVerdict(w){
@@ -2874,7 +2906,7 @@ function summaryBody(w){
     <section class="sec"><span class="label">Who paid</span><div>${w.who.map(x => `<div class="wwho"><span class="av">${sprite(x.h)}</span><div style="min-width:0;flex:1">
         <b>${esc(nameOf(x.h))}: ${money(x.paid)}</b> <span class="small muted">· ${x.n} ${x.n === 1 ? "purchase" : "purchases"}</span>
         ${x.paid ? `<p>${money(x.shared)} shared, ${money(x.own)} just ${x.h === prefs.user ? "yours" : (x.h === "sam" ? "hers" : "his")}${x.top.length ? ` · mostly ${x.top.map(([n, a]) => `${esc(n)} ${money(a)}`).join(", ")}` : ""}</p>` : `<p>Nothing logged.</p>`}</div></div>`).join("")}</div>
-      ${w.sharedTotal ? `<p class="small" style="margin:6px 0 0">Shared costs came to ${money(w.sharedTotal)}, so ${money(Math.round(w.sharedTotal / 2))} each. ${esc(balTxt)}</p>` : ""}</section>
+      ${w.sharedTotal ? `<p class="small" style="margin:6px 0 0">Shared costs came to ${money(w.sharedTotal)}: ${esc(nameOf("sam"))}'s part ${money(Math.round(w.sharedSam))}, ${esc(nameOf("charlie"))}'s part ${money(w.sharedTotal - Math.round(w.sharedSam))}. ${esc(balTxt)}</p>` : ""}</section>
     ${w.biggest ? `<section class="sec"><span class="label">Biggest purchase</span><p style="margin:0">${money(w.biggest.amount)} · ${esc(w.biggest.note || catName(w.biggest.categoryId))} <span class="small muted">(${esc(nameOf(w.biggest.paidBy))}, ${esc(niceDate(w.biggest.date))})</span></p></section>` : ""}` : ""}
     ${balance() ? `<div class="actions" style="justify-content:flex-start"><button type="button" class="btn ghost small" data-act="settleUp">Record a payment</button></div>` : ""}`;
 }
@@ -2930,6 +2962,33 @@ function wrapTeaserHTML(){
     <p>How much went out, on what, and who paid.</p>
     <div class="actions" style="margin-top:8px;justify-content:flex-start"><button type="button" class="btn small" data-act="openWrap" data-id="${k}">Read it</button><button type="button" class="link" data-act="wrapDismiss" data-id="${k}">Not now</button></div></div></section>`;
 }
+// Every entry that moves who-owes-whom, oldest first, with the running balance (+ = Charlie owes Sam).
+function oweLedger(){
+  const list = state.budget.txns.filter(t => !t.cancelled && ((t.kind === "expense" && t.shared) || t.kind === "settle"))
+    .slice().sort((a, b) => a.date.localeCompare(b.date) || (a.kind === "settle") - (b.kind === "settle"));
+  let run = 0;
+  return list.map(t => {
+    const eff = t.kind === "settle" ? (t.paidBy === "charlie" ? -t.amount : t.amount) : (t.paidBy === "sam" ? t.amount - samPart(t) : -samPart(t));
+    run += eff; return {t, eff, run};
+  });
+}
+function oweSheet(all){
+  const L = oweLedger(); let start = 0;
+  if(!all) for(let i = L.length - 1; i >= 0; i--) if(Math.round(L[i].run) === 0){ start = i + 1; break; }
+  const rows = L.slice(start), bal = balance();
+  const who = v => v > 0 ? `${nameOf("charlie")} owes ${nameOf("sam")}` : `${nameOf("sam")} owes ${nameOf("charlie")}`;
+  const sign = v => (Math.round(v) === 0 ? "even" : `${v > 0 ? nameOf("charlie") : nameOf("sam")} +${money(Math.abs(Math.round(v)))}`);
+  openSheet(bal === 0 ? "You're even" : `${who(bal)} ${money(Math.abs(bal))}`, `
+    <p class="small muted" style="margin:0">${all || start === 0 ? "Every shared cost and payment between you." : `Since you were last even (${esc(niceDate(L[start - 1].t.date))}).`} Each line shows how it moved the balance, and the running total on the right.</p>
+    ${rows.length ? `<div>${rows.map(({t, eff, run}) => { const sm = Math.round(samPart(t));
+      const sub = t.kind === "settle" ? `${esc(nameOf(t.paidBy))} paid ${esc(nameOf(other(t.paidBy)))}` : `${esc(nameOf(t.paidBy))} paid ${money(t.amount)} · ${esc(nameOf("sam"))} ${money(sm)}, ${esc(nameOf("charlie"))} ${money(t.amount - sm)}`;
+      return `<button type="button" class="owerow owebtn" data-act="editTxn" data-id="${t.id}" style="width:100%"><span class="ot">${esc(t.note || (t.kind === "settle" ? "Payment between you" : catName(t.categoryId)))}</span>
+        <span class="ov">${esc(sign(eff).replace("even", "—"))}</span><span class="os">${esc(niceDate(t.date))} · ${sub}</span><span class="or">${Math.round(run) === 0 ? "even" : `${money(Math.abs(Math.round(run)))} ${run > 0 ? "→ " + esc(nameOf("sam")) : "→ " + esc(nameOf("charlie"))}`}</span></button>`; }).join("")}</div>`
+      : `<div class="empty"><p>No shared costs or payments yet.</p></div>`}
+    <p class="small" style="margin:0">"${esc(nameOf("charlie"))} +$X" means ${esc(nameOf("charlie"))} owes ${esc(nameOf("sam"))} $X more because of that line; the right column is who's owed after it.</p>
+    <div class="actions"><span>${!all && start > 0 ? `<button type="button" class="link" data-act="oweAll">Show everything</button>` : ""}</span>
+      <div class="r">${bal ? `<button type="button" class="btn ghost" data-act="settleUp">Record payment</button>` : ""}<button type="button" class="btn" data-act="closeSheet">Close</button></div></div>`, () => {}, false);
+}
 function monthStats(k){
   const tx = state.budget.txns.filter(t => t.date.slice(0, 7) === k), live = tx.filter(t => !t.cancelled);   // tx: for the list; live: for totals
   const spent = live.filter(t => t.kind === "expense").reduce((a, t) => a + t.amount, 0);
@@ -2959,7 +3018,7 @@ function jeffSays(k, st){
 
 // One person's view of a month: their share of spending (own things + half of shared), their income.
 function personStats(st, who){
-  const live = st.tx.filter(t => !t.cancelled), share = t => t.shared ? Math.round(t.amount / 2) : (t.paidBy === who ? t.amount : 0);
+  const live = st.tx.filter(t => !t.cancelled), share = t => Math.round(shareOf(t, who));
   const exp = live.filter(t => t.kind === "expense"), byCat = {};
   exp.forEach(t => { const v = share(t); if(v) byCat[t.categoryId || "none"] = (byCat[t.categoryId || "none"] || 0) + v; });
   return {spent: exp.reduce((a, t) => a + share(t), 0), paid: exp.filter(t => t.paidBy === who).reduce((a, t) => a + t.amount, 0),
@@ -2993,8 +3052,8 @@ function viewBudget(){
     <div class="stat"><span class="label">${who ? `${esc(nameOf(who))}'s income` : "Income"}</span><b>${money(st.income)}</b><span class="small muted">${st.income ? `${money(Math.abs(st.income - st.spent))} ${st.income >= st.spent ? "after spending" : "short"}` : "None logged"}</span></div>
   </div>
   ${hasShared ? `<section class="card settle"><div><span class="label">Shared spending</span>
-      <p style="margin:2px 0 0;font-weight:600">${bal === 0 ? "You're even." : `${bal > 0 ? "Charlie owes Sam" : "Sam owes Charlie"} ${money(Math.abs(bal))}`}</p>
-      <span class="small muted">Shared costs split 50/50.</span></div>
+      <p style="margin:2px 0 0;font-weight:600"><button type="button" class="owebtn" data-act="oweDetail">${bal === 0 ? "You're even." : `<u>${bal > 0 ? "Charlie owes Sam" : "Sam owes Charlie"} ${money(Math.abs(bal))}</u>`}</button></p>
+      <span class="small muted">Tap to see what makes it up.</span></div>
     <div class="settle-actions">${bal !== 0 && (state.budget.venmo || {})[bal > 0 ? "sam" : "charlie"] ? `<a class="btn ghost small" href="${esc(venmoLink(state.budget.venmo[bal > 0 ? "sam" : "charlie"], Math.abs(bal)))}" target="_blank" rel="noopener">Pay ${esc(nameOf(bal > 0 ? "sam" : "charlie"))} in Venmo</a>` : ""}
     ${bal !== 0 ? `<button type="button" class="btn small" data-act="settleUp">Record payment</button>` : ""}</div></section>` : ""}
 
@@ -3019,8 +3078,8 @@ function viewBudget(){
       <div class="glist">${st.tx.filter(t => t.date === d).sort((a,b) => b.amount - a.amount).map(t => `<button type="button" class="txrow ${t.cancelled ? "cx" : ""}" data-act="editTxn" data-id="${t.id}">
         <span class="av ${t.paidBy}">${sprite(t.paidBy, "", true)}</span>
         <span class="tb"><span class="tt">${esc(t.note || (t.kind === "settle" ? "Payment between you" : t.kind === "income" ? "Income" : catName(t.categoryId)))}</span>
-          <span class="ts">${t.cancelled ? `<span class="pill late">${t.kind === "income" ? "Didn't come in" : "Cancelled"}</span> ` : ""}${t.kind === "expense" ? `${esc(catName(t.categoryId))}${t.shared ? " · shared" : ` · ${esc(nameOf(t.paidBy))}'s`}` : t.kind === "settle" ? `${esc(nameOf(t.paidBy))} paid ${esc(nameOf(other(t.paidBy)))}` : `${esc(nameOf(t.paidBy))}`}</span>
-          ${t.details ? `<span class="td">${esc(t.details)}</span>` : ""}${who && t.kind === "expense" && t.shared ? `<span class="td">${esc(nameOf(who))}'s half: ${money(Math.round(t.amount / 2))}</span>` : ""}</span>
+          <span class="ts">${t.cancelled ? `<span class="pill late">${t.kind === "income" ? "Didn't come in" : "Cancelled"}</span> ` : ""}${t.kind === "expense" ? `${esc(catName(t.categoryId))}${t.shared ? " · " + esc(splitLabel(t)) : ` · ${esc(nameOf(t.paidBy))}'s`}` : t.kind === "settle" ? `${esc(nameOf(t.paidBy))} paid ${esc(nameOf(other(t.paidBy)))}` : `${esc(nameOf(t.paidBy))}`}</span>
+          ${t.details ? `<span class="td">${esc(t.details)}</span>` : ""}${who && t.kind === "expense" && t.shared ? `<span class="td">${esc(nameOf(who))}'s part: ${money(Math.round(shareOf(t, who)))}</span>` : ""}</span>
         <span class="ta ${t.kind}">${t.kind === "income" ? "+" : ""}${money(t.amount)}</span></button>`).join("")}</div></div>`).join("")
       : `<div class="empty"><p>${who ? `Nothing for ${esc(nameOf(who))} in ${esc(monthName(k))}.` : `No spending logged for ${esc(monthName(k))}.`}</p>${isNow ? `<button type="button" class="btn" data-act="newTxn">${IC.plus} Add spending</button>` : ""}</div>`}
   </section>
@@ -3030,6 +3089,42 @@ function viewBudget(){
 /* ---- forms ---- */
 function catOptions(sel){ return `<option value="">Uncategorized</option>` + state.budget.categories.map(c => `<option value="${c.id}" ${sel === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join(""); }
 function whoRadios(name, sel){ return `<div class="seg" role="radiogroup">${HUMANS.map(k => `<label class="chip" style="cursor:pointer"><input type="radio" name="${name}" value="${k}" ${sel === k ? "checked" : ""} style="accent-color:var(--accent)"> ${esc(nameOf(k))}</label>`).join("")}</div>`; }
+function splitPicker(prefix, sp, amount){
+  const mode = sp ? sp.mode : "half";
+  const v = !sp ? "" : sp.mode === "pct" ? String(sp.sam) : centsToInput(sp.sam);
+  return `<div class="field splitbox" id="f-${prefix}split"><span class="lab">How to split</span>
+    <div class="seg" role="radiogroup" aria-label="How to split">${[["half", "50/50"], ["pct", "By percent"], ["amt", "By amount"]].map(([k, l]) => `<label class="chip" style="cursor:pointer"><input type="radio" name="${prefix}smode" value="${k}" ${mode === k ? "checked" : ""}> ${l}</label>`).join("")}</div>
+    <div class="two" id="${prefix}sval" ${mode === "half" ? "hidden" : ""}><div class="field"><label for="${prefix}sv" id="${prefix}svlab">${mode === "amt" ? `${esc(nameOf("sam"))}'s part ($)` : `${esc(nameOf("sam"))}'s part (%)`}</label>
+      <input id="${prefix}sv" name="${prefix}sv" inputmode="decimal" value="${esc(v)}" placeholder="${mode === "amt" ? "e.g. 1000" : "e.g. 40"}" autocomplete="off"></div>
+      <div class="field"><span class="lab">${esc(nameOf("charlie"))}'s part</span><span class="small" id="${prefix}sother" style="padding-top:12px">—</span></div></div>
+    <span class="hint" id="${prefix}shint"></span></div>`;
+}
+// Read the split from a form. Returns {split} or {error}.
+function readSplit(form, prefix, amount){
+  const mode = (form.querySelector(`input[name=${prefix}smode]:checked`) || {}).value || "half";
+  if(mode === "half") return {split:null};
+  const raw = val(form, prefix + "sv");
+  if(mode === "pct"){ const n = parseFloat(raw.replace("%", "")); if(!(n >= 0 && n <= 100)) return {error:`Enter ${nameOf("sam")}'s percent, from 0 to 100.`}; return {split: cleanSplit({mode:"pct", sam:n}, amount)}; }
+  const c = parseMoney(raw); if(c === null || c > amount) return {error:`Enter ${nameOf("sam")}'s part, from $0 up to the total.`};
+  return {split: {mode:"amt", sam:c}};
+}
+// Keep the split box in step with the Shared switch, the mode and the amount.
+function wireSplit(prefix, sharedName, amountName){
+  const form = $("#sheetForm"); if(!form) return;
+  const upd = () => {
+    const shared = form.elements[sharedName] && form.elements[sharedName].checked, box = $("#f-" + prefix + "split"); if(!box) return;
+    box.hidden = !shared;
+    const mode = (form.querySelector(`input[name=${prefix}smode]:checked`) || {}).value || "half";
+    $("#" + prefix + "sval").hidden = mode === "half";
+    $("#" + prefix + "svlab").textContent = `${nameOf("sam")}'s part (${mode === "amt" ? "$" : "%"})`;
+    const amt = parseMoney(val(form, amountName)) || 0, r = readSplit(form, prefix, amt || 1e12), other = $("#" + prefix + "sother"), hint = $("#" + prefix + "shint");
+    if(r.error || !amt){ other.textContent = "—"; hint.textContent = amt ? "" : "Enter the amount to see each part."; return; }
+    const sm = Math.round(r.split ? samPart({amount:amt, split:r.split}) : amt / 2);
+    other.textContent = mode === "pct" ? `${Math.round((100 - parseFloat(val(form, prefix + "sv"))) * 10) / 10}% · ${money(amt - sm)}` : money(amt - sm);
+    hint.textContent = `${nameOf("sam")} ${money(sm)} · ${nameOf("charlie")} ${money(amt - sm)}`;
+  };
+  form.addEventListener("input", upd); form.addEventListener("change", upd); upd();
+}
 function txnForm(id, preset){
   const t = id ? state.budget.txns.find(x => x.id === id) : null; if(id && !t) return;
   if(t && t.kind === "settle") return settleForm(t.id);
@@ -3041,7 +3136,8 @@ function txnForm(id, preset){
     ${field("tnote","What was it?", `<input id="tnote" name="tnote" maxlength="80" value="${esc(d.note)}" placeholder="Trader Joe's, vet visit, paycheck…">`)}
     <div id="expOnly">${field("tcat","Category", `<select id="tcat" name="tcat">${catOptions(d.categoryId)}</select>`)}</div>
     <div class="field"><span class="lab">Who paid?</span>${whoRadios("paidBy", d.paidBy)}</div>
-    <label class="chip" id="sharedBox" style="align-self:flex-start;cursor:pointer"><input type="checkbox" name="shared" ${d.shared?"checked":""} style="accent-color:var(--accent)"> Shared cost (split 50/50)</label>
+    <label class="chip" id="sharedBox" style="align-self:flex-start;cursor:pointer"><input type="checkbox" name="shared" ${d.shared?"checked":""} style="accent-color:var(--accent)"> Shared cost</label>
+    ${splitPicker("t", d.split, d.amount)}
     ${field("tdetails","Details", `<textarea id="tdetails" name="tdetails" maxlength="500" rows="2" placeholder="What exactly you got, order number, why it was returned…">${esc(d.details || "")}</textarea>`, "Optional")}
     <label class="chip" style="align-self:flex-start;cursor:pointer"><input type="checkbox" name="tcancel" ${d.cancelled?"checked":""}> Cancelled or refunded (don't count it)</label>
     ${footer(t ? "delTxn:" + t.id : "")}`,
@@ -3053,13 +3149,16 @@ function txnForm(id, preset){
     const paidBy = (form.querySelector("input[name=paidBy]:checked") || {}).value;
     if(!HUMANS.includes(paidBy)) return fail("tnote","Pick who paid.");
     const cid = val(form,"tcat");
-    const data = {kind, amount, date, note:val(form,"tnote"), paidBy, categoryId: kind === "expense" && state.budget.categories.some(c => c.id === cid) ? cid : null, shared: kind === "expense" && form.elements.shared.checked,
+    const shared = kind === "expense" && form.elements.shared.checked, sp = shared ? readSplit(form, "t", amount) : {split:null};
+    if(sp.error) return fail("tsplit", sp.error);
+    const data = {kind, amount, date, note:val(form,"tnote"), paidBy, categoryId: kind === "expense" && state.budget.categories.some(c => c.id === cid) ? cid : null, shared, split: sp.split,
       details: form.elements.tdetails.value.trim().slice(0, 500), cancelled: form.elements.tcancel.checked};
     if(t) Object.assign(t, data); else state.budget.txns.push(Object.assign({id:uid(), billId:null}, data));
     budgetMonth = date.slice(0, 7);
     save(); closeSheet(); render(); toast(data.cancelled ? "Saved as cancelled · not counted" : t ? "Saved" : kind === "income" ? "Income logged" : `${money(amount)} logged`);
   });
-  const sync = () => { const exp = (document.querySelector("input[name=kind]:checked") || {}).value !== "income"; $("#expOnly").hidden = !exp; $("#sharedBox").hidden = !exp; };
+  wireSplit("t", "shared", "amt");
+  const sync = () => { const exp = (document.querySelector("input[name=kind]:checked") || {}).value !== "income"; $("#expOnly").hidden = !exp; $("#sharedBox").hidden = !exp; if(!exp) $("#f-tsplit").hidden = true; };
   document.querySelectorAll("input[name=kind]").forEach(r => r.addEventListener("change", sync)); sync();
 }
 function settleForm(id){
@@ -3108,8 +3207,9 @@ function billForm(id){
     <div class="two">${field("bdue","Next due", `<input id="bdue" name="bdue" type="date" value="${esc(d.nextDue)}">`)}
     ${field("bcat","Category", `<select id="bcat" name="bcat">${catOptions(d.categoryId)}</select>`)}</div>
     <div class="field"><span class="lab">Who pays it?</span>${whoRadios("bpaid", d.paidBy)}</div>
-    <div class="seg"><label class="chip" style="cursor:pointer"><input type="checkbox" name="bshared" ${d.shared?"checked":""} style="accent-color:var(--accent)"> Shared (50/50)</label>
+    <div class="seg"><label class="chip" style="cursor:pointer"><input type="checkbox" name="bshared" ${d.shared?"checked":""} style="accent-color:var(--accent)"> Shared</label>
       <label class="chip" style="cursor:pointer"><input type="checkbox" name="bauto" ${d.autopay?"checked":""} style="accent-color:var(--accent)"> On autopay</label></div>
+    ${splitPicker("b", d.split, d.amount)}
     ${footer(b ? "delBill:" + b.id : "")}`,
   form => {
     const name = val(form,"bname"), amount = parseMoney(val(form,"bamt")), due = val(form,"bdue"), cycle = val(form,"bcycle");
@@ -3118,12 +3218,14 @@ function billForm(id){
     if(amount === null) return fail("bamt","Enter an amount like 15.99.");
     if(!BILL_CYCLES[cycle]) return fail("bcycle","Pick how often it repeats.");
     if(!isDate(due)) return fail("bdue","Pick the next due date.");
-    const cid = val(form,"bcat");
-    const data = {name, amount, cycle, nextDue:due, categoryId: state.budget.categories.some(c => c.id === cid) ? cid : null, paidBy: HUMANS.includes(paidBy) ? paidBy : prefs.user, shared:form.elements.bshared.checked, autopay:form.elements.bauto.checked};
+    const cid = val(form,"bcat"), bsp = form.elements.bshared.checked ? readSplit(form, "b", amount) : {split:null};
+    if(bsp.error) return fail("bsplit", bsp.error);
+    const data = {name, amount, cycle, nextDue:due, categoryId: state.budget.categories.some(c => c.id === cid) ? cid : null, paidBy: HUMANS.includes(paidBy) ? paidBy : prefs.user, shared:form.elements.bshared.checked, split: bsp.split, autopay:form.elements.bauto.checked};
     if(!b || b.nextDue !== due) data.anchorDay = +due.slice(8);   // a newly typed date sets the day it repeats on
     if(b) Object.assign(b, data); else state.budget.bills.push(Object.assign({id:uid()}, data));
     save(); closeSheet(); render(); toast("Bill saved");
   });
+  wireSplit("b", "bshared", "bamt");
 }
 
 const BUDGET_ACTIONS = {
@@ -3131,6 +3233,8 @@ const BUDGET_ACTIONS = {
   newTxn: () => txnForm(null),
   editTxn: id => txnForm(id),
   settleUp: () => settleForm(null),
+  oweDetail: () => oweSheet(false),
+  oweAll: () => oweSheet(true),
   spendWho: id => { prefs.spendWho = HUMANS.includes(id) ? id : ""; savePrefs(); render(); },
   openWrap: id => { if(!/^\d{4}-\d{2}$/.test(id)) return; prefs.wrapSeen = Object.assign({}, prefs.wrapSeen, {[id]: true});
     const k = todayStr().slice(0, 7), [y, m] = id.split("-").map(Number);
@@ -3142,7 +3246,7 @@ const BUDGET_ACTIONS = {
   editCat: id => catForm(id || null),
   editBill: id => billForm(id || null),
   payBill: id => { const b = state.budget.bills.find(x => x.id === id); if(!b) return;
-    const prevDue = b.nextDue, tx = {id:uid(), kind:"expense", amount:b.amount, date:todayStr(), note:b.name, categoryId:b.categoryId, paidBy:b.paidBy, shared:b.shared, billId:b.id};
+    const prevDue = b.nextDue, tx = {id:uid(), kind:"expense", amount:b.amount, date:todayStr(), note:b.name, categoryId:b.categoryId, paidBy:b.paidBy, shared:b.shared, split: b.shared && b.split ? Object.assign({}, b.split) : null, billId:b.id};
     state.budget.txns.push(tx); b.nextDue = nextBillDate(b); save(); render();
     toast(`${b.name} paid · next ${niceDate(b.nextDue)}`, () => { state.budget.txns = state.budget.txns.filter(t => t.id !== tx.id); b.nextDue = prevDue; save(); render(); }); }
 };
@@ -3167,11 +3271,11 @@ function normalizeBudget(raw){
     fund: normalizeFund(b.fund),
     txns: objs(b.txns).filter(t => isDate(t.date) && cents(t.amount) && ["expense","income","settle"].includes(t.kind)).map(t => Object.assign({}, t, {
       id: t.id ? String(t.id) : uid(), amount: cents(t.amount), paidBy: HUMANS.includes(t.paidBy) ? t.paidBy : "sam",
-      categoryId: t.kind === "expense" && catIds.has(t.categoryId) ? t.categoryId : null, shared: t.kind === "expense" && !!t.shared, note: str(t.note, 80), details: str(t.details, 500), cancelled: !!t.cancelled, billId: t.billId ? String(t.billId) : null })),
+      categoryId: t.kind === "expense" && catIds.has(t.categoryId) ? t.categoryId : null, shared: t.kind === "expense" && !!t.shared, split: t.kind === "expense" && t.shared ? cleanSplit(t.split, cents(t.amount)) : null, note: str(t.note, 80), details: str(t.details, 500), cancelled: !!t.cancelled, billId: t.billId ? String(t.billId) : null })),
     bills: objs(b.bills).filter(x => str(x.name).trim() && cents(x.amount) && isDate(x.nextDue)).map(x => Object.assign({}, x, {
       id: x.id ? String(x.id) : uid(), name: str(x.name, 40).trim(), amount: cents(x.amount), cycle: BILL_CYCLES[x.cycle] ? x.cycle : "monthly",
       anchorDay: clampInt(x.anchorDay, 1, 31, +x.nextDue.slice(8)),
-      categoryId: catIds.has(x.categoryId) ? x.categoryId : null, paidBy: HUMANS.includes(x.paidBy) ? x.paidBy : "sam", shared: !!x.shared, autopay: !!x.autopay }))
+      categoryId: catIds.has(x.categoryId) ? x.categoryId : null, paidBy: HUMANS.includes(x.paidBy) ? x.paidBy : "sam", shared: !!x.shared, split: x.shared ? cleanSplit(x.split, cents(x.amount)) : null, autopay: !!x.autopay }))
   });
 }
 function billsDueHTML(){
@@ -4985,7 +5089,7 @@ function toast(msg, undo, label, ms){
   toastTimer = setTimeout(() => { $("#toastRoot").innerHTML = ""; toast.undo = null; }, ms || (undo ? 5000 : 2200));
 }
 /* ---- which version is this, and is there a newer one? ---- */
-const BUILD = "2026-10-30 · 28";
+const BUILD = "2026-10-30 · 30";
 let updateSeen = "";
 async function checkForUpdate(){
   if(!/^https?:$/.test(location.protocol) || navigator.onLine === false) return;

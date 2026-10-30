@@ -1198,7 +1198,7 @@ async def test_person_view(browser):
     check("person view: Sam's share = own + half of shared", "Sam's share" in t and "$1,520.00" in t and "$20.00 paid by Sam" in t, t[:600])
     check("person view: Sam's income only", "Sam's income" in t and "$1,000.00" in t and "$1,800.00" not in t)
     check("person view: Sam's list leaves out Charlie's own things", "Sam book" in t and "Big shop" in t and "Charlie game" not in t)
-    check("person view: shared entries show Sam's half", "Sam's half: $1,500.00" in t)
+    check("person view: shared entries show Sam's part", "Sam's part: $1,500.00" in t)
     check("person view: cancelled still not counted", await ev(pg, "personStats(monthStats('2026-10'), 'sam').spent") == 152000)
     check("person view: categories show Sam's share, targets explained", "Groceries" in t and "$1,500.00" in t and "Targets are for both of you" in t)
     await act(pg, "spendWho", "charlie"); t = await view()
@@ -1253,6 +1253,58 @@ async def test_pdf_statements(browser):
     await pg.context.close()
 
 
+async def test_splits(browser):
+    pg = await new_page(browser, clock="2026-10-30T13:00:00-07:00")
+    await ev(pg, """(() => { state.budget.categories = [{id:'r', name:'Rent', limit:0}, {id:'g', name:'Groceries', limit:0}]; state.budget.txns = [
+        {id:'old', kind:'expense', amount:10000, date:'2026-10-02', categoryId:'g', paidBy:'sam', shared:true, note:'Old 50/50 shop', billId:null}];
+      state.budget.bills = []; save(); ACTIONS.tab('budget'); ACTIONS.btab('spending'); })()""")
+    check("splits: older entries stay 50/50", await ev(pg, "balance()") == 5000)
+    # a bill (rent) split by amount, paid by Charlie
+    await ev(pg, "ACTIONS.editBill()")
+    await fill(pg, {"bname": "Rent", "bamt": "3600", "bdue": "2026-11-01"}); await pg.locator('#sheetForm input[name=bpaid][value=charlie]').check()
+    await pg.locator('#sheetForm input[name=bsmode][value=amt]').check(); await fill(pg, {"bsv": "1500"}); await pg.wait_for_timeout(50)
+    check("splits: the form shows each part as you type", "Sam $1,500.00 · Charlie $2,100.00" in await ev(pg, "document.querySelector('#bshint').textContent"))
+    await submit(pg)
+    b = (await stored(pg))["budget"]["bills"][0]
+    check("splits: bill saves its split", b["split"] == {"mode": "amt", "sam": 150000}, json.dumps(b.get("split")))
+    await act(pg, "payBill", b["id"])
+    t = [x for x in (await stored(pg))["budget"]["txns"] if x["note"] == "Rent"][0]
+    check("splits: paying the bill copies the split", t["split"] == {"mode": "amt", "sam": 150000} and t["paidBy"] == "charlie")
+    check("splits: Sam owes Charlie her $1,500 part (minus the $50 he owes her)", await ev(pg, "balance()") == 5000 - 150000, await ev(pg, "balance()"))
+    # a spending entry split by percent
+    await ev(pg, "ACTIONS.newTxn()")
+    await fill(pg, {"amt": "200", "tnote": "Costco"}); await pg.locator('#sheetForm input[name=tsmode][value=pct]').check(); await fill(pg, {"tsv": "40"}); await pg.wait_for_timeout(50)
+    check("splits: percent shows the other person's share", "60% · $120.00" in await ev(pg, "document.querySelector('#tsother').textContent"))
+    await submit(pg)
+    c = [x for x in (await stored(pg))["budget"]["txns"] if x["note"] == "Costco"][0]
+    check("splits: percent split saves", c["split"] == {"mode": "pct", "sam": 40} and c["paidBy"] == "sam", json.dumps(c.get("split")))
+    check("splits: Charlie owes Sam his 60% ($120)", await ev(pg, "balance()") == 5000 - 150000 + 12000)
+    check("splits: the list shows the split", "shared 40/60" in await ev(pg, "document.querySelector('#view').innerText"))
+    check("splits: each person's share uses it", await ev(pg, "personStats(monthStats('2026-11'), 'charlie').spent + personStats(monthStats('2026-10'), 'charlie').spent") == 210000 + 12000 + 5000)
+    w = await ev(pg, "rangeWrap('2026-10-01', '2026-11-30')")
+    check("splits: summaries use it", w["sharedTotal"] == 10000 + 360000 + 20000 and round(w["sharedSam"]) == 5000 + 150000 + 8000)
+    # bad input
+    await ev(pg, "ACTIONS.newTxn()"); await fill(pg, {"amt": "50", "tnote": "Bad"}); await pg.locator('#sheetForm input[name=tsmode][value=amt]').check(); await fill(pg, {"tsv": "80"}); await submit(pg)
+    check("splits: a part bigger than the total is refused", await sheet_open(pg) and "up to the total" in await ev(pg, "document.querySelector('#sheetForm').innerText"))
+    await pg.locator('#sheetForm input[name=tsmode][value=pct]').check(); await fill(pg, {"tsv": "140"}); await submit(pg)
+    check("splits: a percent over 100 is refused", await sheet_open(pg) and "from 0 to 100" in await ev(pg, "document.querySelector('#sheetForm').innerText"))
+    await ev(pg, "closeSheet()")
+    # the breakdown
+    await act(pg, "oweDetail")
+    sh = await ev(pg, "document.querySelector('#sheetForm').innerText")
+    check("owe breakdown: lists the entries behind the balance", "Old 50/50 shop" in sh and "Rent" in sh and "Costco" in sh and "Sam $1,500.00, Charlie $2,100.00" in sh, sh[:500])
+    check("owe breakdown: running total ends at the balance", "$1,330.00 → Charlie" in sh)
+    await ev(pg, "closeSheet(); state.budget.txns.push({id:'pay', kind:'settle', amount:133000, date:'2026-11-02', paidBy:'sam', shared:false, categoryId:null, note:'', billId:null}); save(); render()")
+    await ev(pg, "state.budget.txns.push({id:'new', kind:'expense', amount:3000, date:'2026-11-03', categoryId:'g', paidBy:'sam', shared:true, note:'Tacos', billId:null}); save(); render()")
+    await act(pg, "oweDetail")
+    sh = await ev(pg, "document.querySelector('#sheetForm').innerText")
+    check("owe breakdown: starts from when you were last even", "Tacos" in sh and "Costco" not in sh and "Since you were last even" in sh)
+    await act(pg, "oweAll")
+    check("owe breakdown: Show everything goes back to the start", "Costco" in await ev(pg, "document.querySelector('#sheetForm').innerText"))
+    check("splits/owe: no page errors", not pg.errors, "; ".join(pg.errors))
+    await pg.context.close()
+
+
 async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch()
@@ -1273,6 +1325,7 @@ async def main():
         await test_entries_import(browser)
         await test_person_view(browser)
         await test_pdf_statements(browser)
+        await test_splits(browser)
         await browser.close()
     failed = [r for r in results if not r[1]]
     print(f"\n{len(results) - len(failed)} of {len(results)} checks passed")
