@@ -1769,6 +1769,55 @@ async def test_payment_covers(browser):
     await pg.context.close()
 
 
+async def test_fund_sources(browser):
+    pg = await new_page(browser, clock="2026-10-30T19:00:00-07:00")
+    await ev(pg, """(() => { prefs.user = 'sam'; savePrefs(); state.budget.fund.entries = []; state.budget.fund.goals = [];
+      state.budget.txns = [{id:'pay', kind:'income', amount:240000, date:'2026-10-30', categoryId:null, paidBy:'sam', shared:false, note:'Stanford', billId:null},
+        {id:'old', kind:'income', amount:5000, date:'2026-06-01', categoryId:null, paidBy:'sam', shared:false, note:'Old gift', billId:null}];
+      state.budget.paydays = []; budgetMonth = '2026-10'; save(); ACTIONS.tab('budget'); ACTIONS.btab('fund'); })()""")
+    await act(pg, "fundIn")
+    opts = await ev(pg, "[...document.querySelectorAll('#fsrc option')].map(o => o.value + '=' + o.textContent)")
+    check("fund sources: Add money lists recent income lines (not ones over 90 days old) and New income", any(o.startswith("pay=Stanford · Oct 30 · $2,400.00 left") for o in opts) and not any(o.startswith("old=") for o in opts) and opts[-1].startswith("new="), json.dumps(opts))
+    await fill(pg, {"famt": "3000", "fplace": "Savings account", "fsrc": "pay"}); await submit(pg)
+    check("fund sources: can't take more than the paycheck", "Only $2,400.00 of “Stanford” is left" in await err_text(pg), await err_text(pg))
+    await fill(pg, {"famt": "200"}); await submit(pg)
+    st = await stored(pg); e = st["budget"]["fund"]["entries"]
+    check("fund sources: saved linked to the paycheck", len(e) == 1 and e[0]["incomeId"] == "pay" and e[0]["amount"] == 20000)
+    check("fund sources: the ledger says where it came from", "from Stanford (Oct 30)" in await ev(pg, "document.querySelector('#view').innerText"))
+    await act(pg, "fundIn")
+    check("fund sources: the paycheck now shows $2,200 left", any("$2,200.00 left" in o for o in await ev(pg, "[...document.querySelectorAll('#fsrc option')].map(o => o.textContent)")))
+    # gift money as new income
+    await fill(pg, {"famt": "100", "fplace": "Cash jar", "fsrc": "new"}); await submit(pg)
+    check("fund sources: new income needs a note", "Say what the income was" in await err_text(pg))
+    await fill(pg, {"fnote": "Birthday money from Mom"}); await submit(pg)
+    st = await stored(pg); gift = [t for t in st["budget"]["txns"] if t.get("note") == "Birthday money from Mom"]
+    ge = [x for x in st["budget"]["fund"]["entries"] if x.get("place") == "Cash jar"]
+    check("fund sources: New income logs the income line too, and links it", len(gift) == 1 and gift[0]["kind"] == "income" and gift[0]["amount"] == 10000 and ge and ge[0]["incomeId"] == gift[0]["id"])
+    await act(pg, "btab", "spending")
+    v = await ev(pg, "document.querySelector('#view').innerText")
+    check("fund sources: income lines show how much went to the fund", "$200.00 to the" in v and "$100.00 to the" in v, v[-900:])
+    # unlinked still works, and entries saved before this have no link
+    await act(pg, "btab", "fund"); await act(pg, "fundIn"); await fill(pg, {"famt": "20", "fplace": "Cash jar"}); await submit(pg)
+    check("fund sources: Not linked still saves (no link stored)", await ev(pg, "fund().entries.filter(e => !('incomeId' in e)).length") == 1)
+    # paycheck: $150 to the fund every payday
+    await act(pg, "btab", "spending"); await act(pg, "editPayday")
+    await fill(pg, {"pname": "Stanford", "pamt": "2400", "pcycle": "semimonthly", "pday1": "15", "pday2": "31", "pfund": "3000"}); await submit(pg)
+    check("fund sources: a payday amount over the paycheck is refused", "more than the paycheck" in await err_text(pg))
+    await fill(pg, {"pfund": "150", "pfplace": "Savings account"}); await submit(pg)
+    pid = await ev(pg, "state.budget.paydays[0].id")
+    await act(pg, "gotPay", pid)
+    st = await stored(pg); inc = [t for t in st["budget"]["txns"] if t.get("paydayId") == pid][0]
+    fe = [x for x in st["budget"]["fund"]["entries"] if x.get("incomeId") == inc["id"]]
+    check("fund sources: Got it also puts $150 in the fund, linked to that paycheck", len(fe) == 1 and fe[0]["amount"] == 15000 and fe[0]["place"] == "Savings account" and fe[0]["who"] == "sam")
+    await act(pg, "undo")
+    st = await stored(pg)
+    check("fund sources: undo takes back the paycheck and the fund money", not [t for t in st["budget"]["txns"] if t.get("paydayId") == pid] and not [x for x in st["budget"]["fund"]["entries"] if x.get("note") == "From Stanford"])
+    await pg.reload(); await pg.wait_for_timeout(300)
+    check("fund sources: links survive a reload", await ev(pg, "fund().entries.filter(e => e.incomeId).length") == 2 and await ev(pg, "state.budget.paydays[0].toFund") == 15000)
+    check("fund sources: no page errors", not pg.errors, "; ".join(pg.errors))
+    await pg.context.close()
+
+
 async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch()
@@ -1798,6 +1847,7 @@ async def main():
         await test_duplicates(browser)
         await test_bill_match(browser)
         await test_payment_covers(browser)
+        await test_fund_sources(browser)
         await browser.close()
     failed = [r for r in results if not r[1]]
     print(f"\n{len(results) - len(failed)} of {len(results)} checks passed")

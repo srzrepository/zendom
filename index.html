@@ -3247,7 +3247,7 @@ function viewBudget(){
         <span class="av ${t.paidBy}">${sprite(t.paidBy, "", true)}</span>
         <span class="tb"><span class="tt">${esc(t.note || (t.kind === "settle" ? "Payment between you" : t.kind === "income" ? "Income" : catName(t.categoryId)))}</span>
           <span class="ts">${t.cancelled ? `<span class="pill late">${t.kind === "income" ? "Didn't come in" : "Cancelled"}</span> ` : ""}${t.kind === "expense" ? `${esc(catName(t.categoryId))}${t.shared ? " · " + esc(splitLabel(t)) : ` · ${esc(nameOf(t.paidBy))}'s`}` : t.kind === "settle" ? `${esc(nameOf(t.paidBy))} paid ${esc(nameOf(other(t.paidBy)))}` : `${esc(nameOf(t.paidBy))}`}</span>
-          ${t.repaid ? `<span class="td">${money(t.gross)} − ${money(t.repaid)} paid back</span>` : ""}${coverStatus(t, CM)}${t.kind === "settle" && t.covers && t.covers.length ? `<span class="td">For ${esc(coveredBy(t, NET).map(expLabel).join(", ") || "costs that were deleted")}</span>` : ""}${t.linked ? `<span class="td">Pays back “${esc(expLabel(t.linked))}” (${esc(niceDate(t.linked.date))}) · counted there</span>` : ""}
+          ${t.repaid ? `<span class="td">${money(t.gross)} − ${money(t.repaid)} paid back</span>` : ""}${coverStatus(t, CM)}${t.kind === "settle" && t.covers && t.covers.length ? `<span class="td">For ${esc(coveredBy(t, NET).map(expLabel).join(", ") || "costs that were deleted")}</span>` : ""}${t.kind === "income" && !t.linked && fundFrom(t.id) ? `<span class="td">${money(fundFrom(t.id))} to the ${esc(fund().name)}</span>` : ""}${t.linked ? `<span class="td">Pays back “${esc(expLabel(t.linked))}” (${esc(niceDate(t.linked.date))}) · counted there</span>` : ""}
           ${t.details ? `<span class="td">${esc(t.details)}</span>` : ""}${who && t.kind === "expense" && t.shared ? `<span class="td">${esc(nameOf(who))}'s part: ${money(Math.round(shareOf(t, who)))}</span>` : ""}</span>
         <span class="ta ${t.kind}">${t.linked ? `(${money(t.amount)})` : (t.kind === "income" ? "+" : "") + money(t.amount)}</span></button>${paybackRows(t)}${coverRows(t, CM)}`).join("")}</div></div>`).join("")
       : `<div class="empty"><p>${who ? `Nothing for ${esc(nameOf(who))} in ${esc(monthName(k))}.` : `No spending logged for ${esc(monthName(k))}.`}</p>${isNow ? `<button type="button" class="btn" data-act="newTxn">${IC.plus} Add spending</button>` : ""}</div>`}
@@ -3562,6 +3562,8 @@ function paydayForm(id){
     <div id="pDateBox">${field("pnext","Next payday", `<input id="pnext" name="pnext" type="date" value="${esc(d.cycle === "weekly" || d.cycle === "biweekly" ? d.next : todayStr())}">`)}</div>
     <div class="two" id="pDaysBox">${field("pday1","On the", `<select id="pday1" name="pday1">${dayOptions(dd[0])}</select>`)}
       <div id="pDay2Wrap">${field("pday2","and the", `<select id="pday2" name="pday2">${dayOptions(dd[1])}</select>`)}</div></div>
+    <div class="two">${field("pfund", "To the Fun Fund each payday", `<input id="pfund" name="pfund" inputmode="decimal" placeholder="$0 (optional)" value="${esc(centsToInput(d.toFund || 0))}" autocomplete="off">`)}
+    ${field("pfplace", "Kept in", `<input id="pfplace" name="pfplace" list="placeList2" maxlength="30" value="${esc(d.fundPlace || placeList()[0])}" autocomplete="off"><datalist id="placeList2">${placeList().map(x => `<option value="${esc(x)}">`).join("")}</datalist>`)}</div>
     <label class="chip" style="align-self:flex-start;cursor:pointer"><input type="checkbox" name="pweekend" ${d.weekend ? "checked" : ""} style="accent-color:var(--accent)"> If it lands on a weekend, it comes the Friday before</label>
     ${footer(p ? "delPayday:" + p.id : "")}`,
   form => {
@@ -3583,7 +3585,11 @@ function paydayForm(id){
       const same = p && p.cycle === cycle && JSON.stringify(p.days) === JSON.stringify(days);
       next = same ? p.next : payByDays(days, todayStr(), false);   // keep your place unless the days changed
     }
-    const data = {name, amount, who, cycle, next, days, weekend: form.elements.pweekend.checked};
+    const fRaw = val(form, "pfund"), toFund = fRaw ? parseMoney(fRaw) : 0, fundPlace = val(form, "pfplace").slice(0, 30);
+    if(toFund === null) return fail("pfund", "Enter an amount like 100, or leave it empty.");
+    if(toFund > amount) return fail("pfund", "That's more than the paycheck.");
+    if(toFund && !fundPlace) return fail("pfplace", "Say where it's kept, like Savings account.");
+    const data = {name, amount, who, cycle, next, days, weekend: form.elements.pweekend.checked, toFund: toFund || 0, fundPlace: toFund ? fundPlace : ""};
     if(p) applyEdit(p, data); else state.budget.paydays.push(Object.assign({id:uid()}, data));
     save(); closeSheet(); render(); toast(`Saved · next payday ${niceDate(payActual(data, next))}`);
   });
@@ -3656,8 +3662,12 @@ const BUDGET_ACTIONS = {
   gotPay: id => { const p = state.budget.paydays.find(x => x.id === id); if(!p) return;
     const t = todayStr(), a = payActual(p, p.next), prev = p.next, date = a > t ? t : a;
     const tx = {id:uid(), kind:"income", amount:p.amount, date, note:p.name, paidBy:p.who, shared:false, categoryId:null, billId:null, paydayId:p.id};
-    state.budget.txns.push(tx); p.next = payAfter(p, p.next); budgetMonth = date.slice(0, 7); save(); render();
-    toast(`${money(p.amount)} logged · next payday ${niceDate(payActual(p, p.next))}`, () => { state.budget.txns = state.budget.txns.filter(x => x.id !== tx.id); p.next = prev; save(); render(); }); },
+    state.budget.txns.push(tx); p.next = payAfter(p, p.next); budgetMonth = date.slice(0, 7);
+    const fe = p.toFund ? {id:uid(), created:Date.now(), kind:"in", amount:p.toFund, date, who:p.who, place:p.fundPlace || "Savings account", toPlace:"", goalId:"", note:`From ${p.name}`, incomeId:tx.id} : null;
+    if(fe) fund().entries.push(fe);
+    save(); render();
+    toast(`${money(p.amount)} logged${fe ? ` · ${money(fe.amount)} to the ${fund().name}` : ""} · next payday ${niceDate(payActual(p, p.next))}`, () => {
+      state.budget.txns = state.budget.txns.filter(x => x.id !== tx.id); if(fe) removeBy(fund().entries, fe.id); p.next = prev; save(); render(); }); },
   payShare: id => { const e = state.budget.txns.find(x => x.id === id && x.kind === "expense"); if(!e) return;
     const nt = netTx().find(x => x.id === id) || e, ower = other(e.paidBy); closeSheet();
     settleForm(null, {amount: Math.round(shareOf(nt, ower)), paidBy: ower, note: expLabel(e), date: todayStr(), covers: [e.id]}); },
@@ -3712,6 +3722,7 @@ function normalizeBudget(raw){
       const days = (Array.isArray(x.days) ? x.days : []).map(d => clampInt(d, 1, 31, 0)).filter(Boolean).slice(0, 2).sort((a, b) => a - b);
       const need = x.cycle === "semimonthly" ? 2 : x.cycle === "monthly" ? 1 : 0;
       return Object.assign({}, x, {id: x.id ? String(x.id) : uid(), name: str(x.name, 40).trim(), amount: cents(x.amount), who: HUMANS.includes(x.who) ? x.who : "sam",
+        toFund: Math.min(cents(x.toFund), cents(x.amount)), fundPlace: cents(x.toFund) ? (str(x.fundPlace, 30).trim() || "Savings account") : "",
         days: days.length >= need ? [...new Set(days)].slice(0, need) : (need === 2 ? [15, 31] : need === 1 ? [+x.next.slice(8)] : []), weekend: !!x.weekend});
     }).filter(x => x.cycle !== "semimonthly" || x.days.length === 2)
   });
@@ -4541,9 +4552,18 @@ function viewFund(){
   <section class="sec"><span class="label">Ledger</span>
     ${entries.length ? `<div class="glist">${entries.map(e => `<button type="button" class="txrow" data-act="editFund" data-id="${e.id}">
       <span class="av ${e.who}">${sprite(e.who, "", true)}</span>
-      <span class="tb"><span class="tt">${esc(label(e))}</span><span class="ts">${niceDate(e.date)} · ${esc(e.kind === "move" ? `${e.place} → ${e.toPlace}` : e.place)}${e.goalId ? ` · ${esc((f.goals.find(g => g.id === e.goalId) || {name:"goal"}).name)}` : ""}${e.kind === "in" && e.note ? ` · ${esc(e.note)}` : ""}</span></span>
+      <span class="tb"><span class="tt">${esc(label(e))}</span><span class="ts">${niceDate(e.date)} · ${esc(e.kind === "move" ? `${e.place} → ${e.toPlace}` : e.place)}${e.goalId ? ` · ${esc((f.goals.find(g => g.id === e.goalId) || {name:"goal"}).name)}` : ""}${e.kind === "in" && e.note ? ` · ${esc(e.note)}` : ""}${e.incomeId ? (() => { const i = state.budget.txns.find(t => t.id === e.incomeId); return i ? ` · from ${esc(i.note || "income")} (${esc(niceDate(i.date))})` : ""; })() : ""}</span></span>
       <span class="ta ${e.kind === "in" ? "income" : e.kind === "move" ? "settle" : ""}">${e.kind === "in" ? "+" : e.kind === "out" ? "−" : ""}${money(e.amount)}</span></button>`).join("")}</div>`
       : `<div class="empty"><p>No entries yet. Tap Add money to start the fund.</p></div>`}</section>`;
+}
+// Fun Fund money that came from one income line (excluding one entry, when editing it)
+const fundFrom = (incId, exceptId) => fund().entries.filter(e => e.kind === "in" && e.incomeId === incId && e.id !== exceptId).reduce((a, e) => a + e.amount, 0);
+// Income lines you can say fund money came from: last 90 days, not paybacks, not cancelled
+function fundSources(exceptId, keepId){
+  const t0 = todayStr();
+  return state.budget.txns.filter(t => t.kind === "income" && !t.cancelled && !t.repays && isDate(t.date) && (diffDays(t.date, t0) <= 90 || t.id === keepId))
+    .map(t => ({t, used: fundFrom(t.id, exceptId)})).map(x => Object.assign(x, {left: x.t.amount - x.used}))
+    .filter(x => x.left > 0 || x.t.id === keepId).sort((a, b) => b.t.date.localeCompare(a.t.date)).slice(0, 30);
 }
 function placeList(){ return [...new Set(["Savings account","Cash jar","Venmo", ...fund().entries.flatMap(e => [e.place, e.toPlace]).filter(Boolean)])]; }
 function fundForm(kind, id){
@@ -4559,6 +4579,9 @@ function fundForm(kind, id){
     <div class="field"><span class="lab">${kind === "in" ? "Who put it in?" : kind === "out" ? "Who's spending it?" : "Who moved it?"}</span>${whoRadios("fwho", d.who)}</div>
     ${field("fplace", kind === "move" ? "From" : kind === "in" ? "Where is it kept?" : "Taken from", `<input id="fplace" name="fplace" list="placeList" maxlength="30" value="${esc(d.place)}" autocomplete="off">`, kind !== "in" && Object.keys(places).length ? Object.entries(places).map(([p, v]) => `${esc(p)}: ${money(v)}`).join(" · ") : "Savings account, cash jar, Venmo…")}
     ${kind === "move" ? field("ftoplace","To", `<input id="ftoplace" name="ftoplace" list="placeList" maxlength="30" value="${esc(d.toPlace)}" autocomplete="off">`) : ""}
+    ${kind === "in" ? (() => { const src = fundSources(e ? e.id : null, d.incomeId);
+      return field("fsrc", "Where did it come from?", `<select id="fsrc" name="fsrc"><option value="">Not linked to income</option>${src.map(x => `<option value="${x.t.id}" ${d.incomeId === x.t.id ? "selected" : ""}>${esc(cutText(x.t.note || "Income", 24))} · ${esc(niceDate(x.t.date))} · ${money(x.left)} left</option>`).join("")}<option value="new">New income: log it too</option></select>`,
+        "Pick the paycheck or gift it came out of, so you can see where fund money came from."); })() : ""}
     ${kind !== "move" && f.goals.length ? field("fgoal", kind === "in" ? "Toward a goal?" : "From a goal?", `<select id="fgoal" name="fgoal"><option value="">No specific goal</option>${f.goals.map(g => `<option value="${g.id}" ${d.goalId === g.id ? "selected" : ""}>${esc(g.name)}</option>`).join("")}</select>`) : ""}
     ${kind !== "move" ? field("fnote", kind === "in" ? "Note" : "What was it for?", `<input id="fnote" name="fnote" maxlength="80" value="${esc(d.note)}" placeholder="${kind === "in" ? "Birthday money, bonus…" : "Concert tickets, ramen night…"}">`) : ""}
     ${footer(e ? "delFund:" + e.id : "")}`,
@@ -4576,9 +4599,22 @@ function fundForm(kind, id){
       if(amount > have) return fail(kind === "move" ? "famt" : "famt", `Only ${money(Math.max(0, have))} is in ${place}.`);
     }
     const gid = kind !== "move" && form.elements.fgoal ? val(form,"fgoal") : "";
+    let incomeId = kind === "in" && form.elements.fsrc ? val(form, "fsrc") : "";
+    if(incomeId && incomeId !== "new"){
+      const inc = state.budget.txns.find(t => t.id === incomeId && t.kind === "income");
+      if(!inc) return fail("fsrc", "That income line isn't there anymore. Pick another.");
+      const left = inc.amount - fundFrom(inc.id, e ? e.id : null);
+      if(amount > left) return fail("fsrc", `Only ${money(Math.max(0, left))} of “${inc.note || "that income"}” is left to put in the fund.`);
+    }
+    if(incomeId === "new"){
+      if(!val(form, "fnote")) return fail("fnote", "Say what the income was, like Birthday money from Mom.");
+      const inc = {id:uid(), kind:"income", amount, date, note: val(form, "fnote").slice(0, 80), paidBy: HUMANS.includes(who) ? who : prefs.user, shared:false, categoryId:null, billId:null};
+      state.budget.txns.push(inc); incomeId = inc.id;
+    }
     const data = {kind, amount, date, who: HUMANS.includes(who) ? who : prefs.user, place: place.slice(0, 30), toPlace: toPlace.slice(0, 30), goalId: f.goals.some(g => g.id === gid) ? gid : "", note: kind !== "move" ? val(form,"fnote") : ""};
-    if(e) applyEdit(e, data); else f.entries.push(Object.assign({id:uid(), created:Date.now()}, data));
-    save(); closeSheet(); render(); toast(e ? "Saved" : kind === "in" ? `${money(amount)} added to the fund` : kind === "out" ? `${money(amount)} spent from the fund` : "Moved");
+    if(kind === "in") data.incomeId = incomeId || null;
+    if(e){ applyEdit(e, data); if(!e.incomeId) delete e.incomeId; } else { const ne = Object.assign({id:uid(), created:Date.now()}, data); if(!ne.incomeId) delete ne.incomeId; f.entries.push(ne); }
+    save(); closeSheet(); render(); toast(e ? "Saved" : kind === "in" ? `${money(amount)} added to the fund${incomeId ? " · linked to its income" : ""}` : kind === "out" ? `${money(amount)} spent from the fund` : "Moved");
   });
 }
 function goalForm(id){
@@ -4608,7 +4644,8 @@ function normalizeFund(raw){
     entries: objs(f.entries).filter(e => ["in","out","move"].includes(e.kind) && cents(e.amount) && isDate(e.date) && str(e.place).trim()).map(e => Object.assign({}, e, {
       id: e.id ? String(e.id) : uid(), amount: cents(e.amount), who: HUMANS.includes(e.who) ? e.who : "sam", place: str(e.place, 30).trim(),
       toPlace: e.kind === "move" ? str(e.toPlace, 30).trim() : "", goalId: gids.has(e.goalId) ? e.goalId : "", note: str(e.note, 80), created: Number(e.created) || 0 }))
-      .filter(e => e.kind !== "move" || e.toPlace) });
+      .filter(e => e.kind !== "move" || e.toPlace)
+      .map(e => { if(e.kind === "in" && e.incomeId) e.incomeId = String(e.incomeId); else delete e.incomeId; return e; }) });
 }
 function normalizePlan(raw, catIds){
   const out = {};
@@ -5582,7 +5619,7 @@ function toast(msg, undo, label, ms){
   toastTimer = setTimeout(() => { $("#toastRoot").innerHTML = ""; toast.undo = null; }, ms || (undo ? 5000 : 2200));
 }
 /* ---- which version is this, and is there a newer one? ---- */
-const BUILD = "2026-10-30 · 39";
+const BUILD = "2026-10-30 · 40";
 let updateSeen = "";
 async function checkForUpdate(){
   if(!/^https?:$/.test(location.protocol) || navigator.onLine === false) return;
