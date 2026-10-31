@@ -83,7 +83,7 @@ def frame(t):
     # stress lines (from the sketch), flicking between two spots
     if t % 2 == 0: lines = [(1, 9), (2, 7), (2, 8), (3, 6), (4, 10), (4, 11), (29, 4), (30, 5), (30, 6), (31, 7), (28, 7), (29, 8)]
     else: lines = [(0, 10), (1, 8), (1, 9), (2, 7), (3, 11), (3, 12), (29, 3), (30, 4), (31, 5), (31, 6), (28, 6), (29, 7)]
-    for (x, y) in lines: px(x, y, "E")
+    for (x, y) in lines: px(x, y, "K")                              # light, so they show on the app's dark Jeff card
     if t % 8 in (5, 6, 7):                                         # sweat drop on the big numbers
         for (x, y) in ((27, 13), (26, 14), (27, 14), (28, 14), (26, 15), (27, 15), (28, 15)): px(x, y, "s")
         px(27, 14, "W")

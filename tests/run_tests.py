@@ -1078,7 +1078,7 @@ async def test_wrapup(browser):
     check("wrap-up: Today shows the card in the first days of the month", "Jeff's October wrap-up is ready" in await view())
     await act(pg, "openWrap", "2026-10")
     check("wrap-up: Read it opens Budget → Summary on last month", await ev(pg, "prefs.tab + '/' + prefs.budgetTab + '/' + sumRange().preset") == "budget/summary/last")
-    check("summary: Jeff crunches numbers first", await ev(pg, "!!document.querySelector('.jeffanim svg .jf9')") and "Crunching the numbers" in await view())
+    check("summary: Jeff crunches numbers first (either animation)", await ev(pg, "!!document.querySelector('.jeffanim svg .jf9, .jeffanim svg .jg7')") and "Crunching the numbers" in await view())
     await pg.clock.run_for(2000); await pg.wait_for_timeout(100)
     t = await view()
     check("summary: then gives his verdict", "Crunching" not in t and "$2,896.50 more than September" in t and "Eating out ran $112.00 over" in t, t[:400])
@@ -1888,10 +1888,10 @@ async def test_fund_pool(browser):
 async def test_whats_new(browser):
     pg = await new_page(browser, storage={"zendom:prefs": json.dumps({"seenBuild": "2026-10-30 · 40", "tab": "today"})}, clock="2026-10-30T19:30:00-07:00")
     await pg.wait_for_timeout(1400)
-    check("what's new: after an update, a toast offers it", "Updated to version 43" in await ev(pg, "document.querySelector('#toastRoot').innerText"))
+    check("what's new: after an update, a toast offers it", "Updated to version 44" in await ev(pg, "document.querySelector('#toastRoot').innerText"))
     await act(pg, "undo")
     sh = await ev(pg, "document.querySelector('.sheet').innerText")
-    check("what's new: lists versions, newest first, marks the one you have", sh.index("Version 43") < sh.index("Version 42") and "You have this" in sh and "Before version numbers" in sh)
+    check("what's new: lists versions, newest first, marks the one you have", sh.index("Version 44") < sh.index("Version 43") and "You have this" in sh and "Before version numbers" in sh)
     await ev(pg, "closeSheet()")
     await pg.reload(); await pg.wait_for_timeout(1400)
     check("what's new: the toast only shows once per version", "Updated to version" not in await ev(pg, "document.querySelector('#toastRoot').innerText"))
@@ -1929,6 +1929,23 @@ async def test_two_line_statements(browser):
     await pg.context.close()
 
 
+async def test_second_crunch(browser):
+    pg = await new_page(browser, clock="2026-10-30T23:00:00-07:00")
+    picks = []
+    for r in (0.9, 0.1, 0.7):
+        await ev(pg, f"(() => {{ Math.random = () => {r}; sumCrunchKey = ''; ACTIONS.tab('budget'); ACTIONS.btab('summary'); }})()")
+        picks.append(await ev(pg, "document.querySelector('.jeffanim .jg') ? 'top' : document.querySelector('.jeffanim .jf') ? 'desk' : 'none'"))
+    check("second crunch: a random pick shows Jeff from above or at the desk", picks == ["top", "desk", "top"], str(picks))
+    await ev(pg, "(() => { Math.random = () => 0.9; sumCrunchKey = ''; render(); })()")
+    check("second crunch: 8 frames, each a different moment", await ev(pg, "document.querySelectorAll('.jeffanim .jg').length") == 8 and await ev(pg, "new Set([...document.querySelectorAll('.jeffanim .jg')].map(g => g.innerHTML)).size") == 8)
+    check("second crunch: frames play in turn (staggered start)", await ev(pg, "[...document.querySelectorAll('.jeffanim .jg')].map(g => g.style.animationDelay).join()") == "-1.04s,-0.91s,-0.78s,-0.65s,-0.52s,-0.39s,-0.26s,-0.13s")
+    check("second crunch: uses his original colors (hat green, glasses brown)", await ev(pg, "JEFF_ANIM2.pal.V === PIG.pal.V && JEFF_ANIM2.pal.G === PIG.pal.G"))
+    await ev(pg, "(() => { sumCrunchUntil = 0; render(); })()")      # the clock is frozen in this test, so end the crunch by hand
+    check("second crunch: after crunching, plain Jeff with the verdict", await ev(pg, "!document.querySelector('.jeffanim') && !!document.querySelector('.jeff-pig')"))
+    check("second crunch: no page errors", not pg.errors, "; ".join(pg.errors))
+    await pg.context.close()
+
+
 async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch()
@@ -1962,6 +1979,7 @@ async def main():
         await test_fund_pool(browser)
         await test_whats_new(browser)
         await test_two_line_statements(browser)
+        await test_second_crunch(browser)
         await browser.close()
     failed = [r for r in results if not r[1]]
     print(f"\n{len(results) - len(failed)} of {len(results)} checks passed")
