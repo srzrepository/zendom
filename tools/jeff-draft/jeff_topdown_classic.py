@@ -1,5 +1,6 @@
 """Jeff crunching numbers in his ORIGINAL style (the app's flat 32px sprite: no outlines, green bucket hat,
-brown square glasses), seen from above like Sam's sketch: his back is a hump with the curly tail on top,
+brown square glasses), seen from above like Sam's sketch: his back is a hump with the curly tail on top
+that sways side to side as he types,
 head tipped down over a calculator he's hugging, ears out to the sides, stress lines around him.
 Palette letters are the same as PIG in index.html. Run: python3 jeff_topdown_classic.py"""
 from PIL import Image, ImageDraw
@@ -25,14 +26,16 @@ def frame(t):
     tapL, tapR = t % 2 == 0, t % 2 == 1
     bob = t % 2                                                   # head dips with each tap
     # curly tail on top of the back, twitching left/right
-    tx = 19 + (0, 1, 0, -1)[t % 4]
+    wig = (0, 2, 3, 2, 0, -2, -3, -2)[t % 8]                     # his butt sways side to side as he types
+    tx = 19 + wig + (1 if wig > 0 else -1 if wig < 0 else 0)     # the tail swings a little further than the back
     for (x, y) in ((tx, 4), (tx, 3), (tx - 1, 2), (tx - 1, 1), (tx, 0), (tx + 1, 0), (tx + 2, 1), (tx + 1, 2)): px(x, y, "h")
     back = im; im = Image.new("RGBA", (W, H), (0, 0, 0, 0)); d = ImageDraw.Draw(im)
     d_back = ImageDraw.Draw(back)
     # the back: a big hump behind the head, leaning right (visible above the hat and down the right side)
-    d_back.ellipse([8, 3, 29, 21], fill=rgb("P"))
-    d_back.arc([8, 3, 29, 21], -80, 60, fill=rgb("p"))
-    for (x, y) in ((12, 6), (13, 5), (14, 5)): d_back.point((x, y), fill=rgb("W"))
+    d_back.ellipse([7 + wig, 3, 28 + wig, 21], fill=rgb("P"))
+    d_back.ellipse([9 + wig // 2, 10, 28 + wig // 2, 22], fill=rgb("P"))        # lower back moves less (it pivots at the shoulders)
+    d_back.arc([7 + wig, 3, 28 + wig, 21], -80, 60, fill=rgb("p"))
+    for (x, y) in ((12, 6), (13, 5), (14, 5)): d_back.point((x + wig, y), fill=rgb("W"))
     y0 = 9 + bob
     # ears: up and out past the brim corners (the original's ears stick up above the hat)
     for (x, y, k) in ((4, y0-2, "p"), (4, y0-1, "p"), (5, y0-1, "P"), (4, y0, "p"), (5, y0, "P"), (6, y0, "P"), (5, y0+1, "P"), (6, y0+1, "P"), (7, y0+1, "P"), (6, y0+2, "P"), (7, y0+2, "P"), (8, y0+2, "P"),
