@@ -3857,9 +3857,15 @@ function statementRows(lines){
     if(m) return {mo: MONTHS3.indexOf(m[1].slice(0, 3).toLowerCase()) + 1, d:+m[2], y: m[3] ? +m[3] : null, len:m[0].length};
     return null;
   };
+  // Descriptions that are only a transaction type: the real one is on the line(s) below (Schwab and others)
+  const GENERIC = /^(visa debit card (point of sale )?purchase|debit card purchase|pos purchase|point of sale purchase|electronic (withdrawal|deposit|payment)|ach (debit|credit|withdrawal|deposit)|check|atm withdrawal|withdrawal|deposit|recurring debit card purchase)$/i;
+  const NOISE = /©|page \d+ of|account number|statement period|\(continued\)|^activity|^date$|^posted|beginning balance|ending balance|^summary|checks paid|interest earned/i;
+  let last = null;
   lines.forEach(l => {
     const amts = l.items.filter(i => AMT_RE.test(i.s));
     const dt = dateAt(l.text);
+    if(!dt && last && !l.items.some(i => AMT_RE.test(i.s)) && last.extra.length < 2 && l.text.length <= 100 && !NOISE.test(l.text)){ last.extra.push(l.text); return; }
+    if(!dt) last = null;
     if(!dt){
       // column headings (Withdrawals / Deposits / Balance) and section headings (Purchases, Payments and Credits...)
       l.items.forEach(i => { const w = i.s.toLowerCase();
@@ -3896,8 +3902,15 @@ function statementRows(lines){
     const y = dt.y || yearFor(dt.mo, dt.d), date = `${y}-${pad(dt.mo)}-${pad(dt.d)}`;
     if(!isDate(date)) return;
     const tidy = desc.replace(/\s+\d{1,2}%?$/, "").replace(/\s*\d{5}(-\d{4})?\s+[A-Z]{2}\s+USA$/, "").replace(/\s+[A-Z]{2}\s+USA$/, "").trim();
-    rows.push({date, desc: tidy || desc || "Statement line", cents: dir === "out" ? -Math.abs(cents) : Math.abs(cents)});
+    const row = {date, desc: tidy || desc || "Statement line", cents: dir === "out" ? -Math.abs(cents) : Math.abs(cents), extra: []};
+    rows.push(row); last = GENERIC.test(row.desc) ? row : null;
   });
+  // a generic row takes its detail line(s) as the description
+  const tidyDetail = t => t.replace(/~?\s*Tran:\s*\w+/i, "").replace(/\s+\d{6}~?(?=\s|$)/g, "").replace(/\s+Visa Direct\b/i, "")
+    .replace(/,\s*[A-Z]{2},\s*US$/i, "").replace(/,\s*US$/i, "").replace(/^(SQ|TST|PY|SP|DD)\s?\*\s*/i, "").replace(/\s+/g, " ").trim();
+  rows.forEach(r => { if(r.extra.length){ const x = tidyDetail(r.extra.join(" "));
+      if(x) r.desc = /^check$/i.test(r.desc) ? ("Check " + x.replace(/^check\s*(paid\s*)?/i, "")).trim() : cutText(x, 80); }
+    delete r.extra; });
   return {rows, isCard, end};
 }
 async function importPdf(file){
@@ -3917,7 +3930,7 @@ async function importPdf(file){
   clearTimeout(toastTimer); $("#toastRoot").innerHTML = "";
   importPreview(out);
 }
-const TRANSFER_RE = /autopay|payment\s*[-–]?\s*thank you|online (banking )?transfer|transfer (to|from)|card payment|credit card (auto)?pay|e-?payment|mobile payment|ach pmt|internet payment/i;
+const TRANSFER_RE = /crd epay|\bepay\b|autopay|payment\s*[-–]?\s*thank you|online (banking )?transfer|transfer (to|from)|card payment|credit card (auto)?pay|e-?payment|mobile payment|ach pmt|internet payment/i;
 function buildImport(text, fileName){
   const rows = parseCSV(text);
   if(!rows.length) return {error:"That file is empty."};
@@ -5683,9 +5696,10 @@ function toast(msg, undo, label, ms){
   toastTimer = setTimeout(() => { $("#toastRoot").innerHTML = ""; toast.undo = null; }, ms || (undo ? 5000 : 2200));
 }
 /* ---- which version is this, and is there a newer one? ---- */
-const BUILD = "2026-10-30 · 42";
+const BUILD = "2026-10-30 · 43";
 // What's new, newest first: [version, date, changes]. Add a line here with every version.
 const CHANGELOG = [
+  ["43", "2026-10-30", ["Schwab (and similar) PDF statements: purchases come in with the store's name instead of “Visa Debit Card Point of Sale Purchase”, and card payments start unticked as transfers."]],
   ["42", "2026-10-30", ["Fixed: syncing could stop with “The database turned this account away” after you both edited the same thing. Your edits were kept on the phone and go out once both phones update."]],
   ["41", "2026-10-30", ["The Fun Fund is one pool: no more “where is it kept”. Money in shows where it came from, and “Where it came from” sums it up.",
     "Tap a goal to add money to it from the pool, move money back out, or spend from it. Deleting a goal puts its money back in the pool.",

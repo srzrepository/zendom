@@ -1888,10 +1888,10 @@ async def test_fund_pool(browser):
 async def test_whats_new(browser):
     pg = await new_page(browser, storage={"zendom:prefs": json.dumps({"seenBuild": "2026-10-30 · 40", "tab": "today"})}, clock="2026-10-30T19:30:00-07:00")
     await pg.wait_for_timeout(1400)
-    check("what's new: after an update, a toast offers it", "Updated to version 42" in await ev(pg, "document.querySelector('#toastRoot').innerText"))
+    check("what's new: after an update, a toast offers it", "Updated to version 43" in await ev(pg, "document.querySelector('#toastRoot').innerText"))
     await act(pg, "undo")
     sh = await ev(pg, "document.querySelector('.sheet').innerText")
-    check("what's new: lists versions, newest first, marks the one you have", sh.index("Version 42") < sh.index("Version 41") and "You have this" in sh and "Before version numbers" in sh)
+    check("what's new: lists versions, newest first, marks the one you have", sh.index("Version 43") < sh.index("Version 42") and "You have this" in sh and "Before version numbers" in sh)
     await ev(pg, "closeSheet()")
     await pg.reload(); await pg.wait_for_timeout(1400)
     check("what's new: the toast only shows once per version", "Updated to version" not in await ev(pg, "document.querySelector('#toastRoot').innerText"))
@@ -1903,6 +1903,29 @@ async def test_whats_new(browser):
     await pg.context.close()
     pg = await new_page(browser, storage={}, clock="2026-10-30T19:30:00-07:00"); await pg.wait_for_timeout(1400)
     check("what's new: a brand-new install isn't told it updated", "Updated to version" not in await ev(pg, "document.querySelector('#toastRoot').innerText"))
+    await pg.context.close()
+
+
+async def test_two_line_statements(browser):
+    import os
+    V = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendor") + "/"; F = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures") + "/"
+    pg = await new_page(browser, clock="2026-10-30T22:00:00-07:00")
+    await pg.context.route("**/pdf.js/3.11.174/pdf.min.js", lambda r: r.fulfill(path=V + "pdf.min.js", content_type="application/javascript"))
+    await pg.context.route("**/pdf.js/3.11.174/pdf.worker.min.js", lambda r: r.fulfill(path=V + "pdf.worker.min.js", content_type="application/javascript"))
+    await ev(pg, "(() => { state.budget.categories = [{id:'g', name:'Groceries', limit:0}]; state.budget.txns = []; save(); ACTIONS.tab('budget'); ACTIONS.btab('spending'); ACTIONS.importCsv(); })()")
+    await pg.locator('#csvFile').set_input_files(F + "checking_two_line.pdf"); await pg.wait_for_timeout(1800)
+    rows = await ev(pg, "imp && imp.rows.map(x => [x.desc, x.cents, x.include])")
+    by = {r[0]: r for r in rows or []}
+    check("two-line pdf: 10 transactions across 2 pages (balances and the checks table skipped)", rows and len(rows) == 10, json.dumps(rows))
+    check("two-line pdf: purchases use the store on the line below", "EXAMPLE COFFEE MENLO PAR Menlo Park" in by and by["EXAMPLE COFFEE MENLO PAR Menlo Park"][1] == -2326 and "SAFEWAY #0001 MENLO PARK" in by and "EXAMPLE TACOS Oakland" in by, json.dumps(list(by)))
+    check("two-line pdf: no generic 'Point of Sale Purchase' left", not any("Point of Sale" in r[0] or r[0] in ("Electronic Withdrawal", "Electronic Deposit") for r in rows))
+    check("two-line pdf: payroll is money in, tidied", by.get("EXAMPLE CO PAYROLL", [0, 0])[1] == 219991)
+    check("two-line pdf: a check reads 'Check #101'", by.get("Check #101", [0, 0])[1] == -90000)
+    check("two-line pdf: card payments and brokerage transfers start unticked", by["EXAMPLECARD EPAYMENT ACH PMT"][2] is False and by["EXAMPLE CREDIT CRD EPAY"][2] is False and by["Funds Transfer from Brokerage -0000"][2] is False)
+    check("two-line pdf: a Venmo paid by card keeps the person's name", "VENMO *Example Friend" in by)
+    check("two-line pdf: totals match the statement (in $2,599.93, out $1,932.39)", sum(r[1] for r in rows if r[1] > 0) == 259993 and -sum(r[1] for r in rows if r[1] < 0) == 193239)
+    check("two-line pdf: Safeway is guessed as Groceries", await ev(pg, "imp.rows.find(x => x.desc.startsWith('SAFEWAY')).categoryId") == "g")
+    check("two-line pdf: no page errors", not pg.errors, "; ".join(pg.errors))
     await pg.context.close()
 
 
@@ -1938,6 +1961,7 @@ async def main():
         await test_fund_sources(browser)
         await test_fund_pool(browser)
         await test_whats_new(browser)
+        await test_two_line_statements(browser)
         await browser.close()
     failed = [r for r in results if not r[1]]
     print(f"\n{len(results) - len(failed)} of {len(results)} checks passed")

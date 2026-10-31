@@ -62,3 +62,38 @@ def cashback(path):
     c.save()
 cashback("card_cashback.pdf")
 print("ok")
+def two_line_checking(path):
+    """Schwab-style checking: a generic type on the dated line, the merchant on the line below; 2 pages."""
+    c = canvas.Canvas(path, pagesize=letter); W, H = letter
+    rows = [("09/01", "Beginning Balance", "", "", "$1,000.00", None),
+            ("09/01", "Visa Debit Card Point of Sale Purchase", "$23.26", "", "$976.74", "SQ *EXAMPLE COFFEE MENLO PAR Menlo Park, CA, US"),
+            ("09/02", "Funds Transfer from Brokerage -0000", "", "$400.00", "$1,376.74", None),
+            ("09/03", "Electronic Withdrawal", "$142.50", "", "$1,234.24", "EXAMPLECARD EPAYMENT ACH PMT 260903"),
+            ("09/04", "Check", "$900.00", "", "$334.24", "Check Paid #101"),
+            ("09/11", "Electronic Deposit", "", "$2,199.91", "$2,534.15", "EXAMPLE CO PAYROLL 260911~ Tran: ACHDD"),
+            ("09/12", "Visa Debit Card Point of Sale Purchase", "$111.56", "", "$2,422.59", "SAFEWAY #0001 MENLO PARK, CA, US"),
+            ("09/13", "Visa Debit Card Point of Sale Purchase", "$42.00", "", "$2,380.59", "VENMO *Example Friend Visa Direct, NY, US"),
+            ("09/14", "Electronic Withdrawal", "$700.00", "", "$1,680.59", "EXAMPLE CREDIT CRD EPAY 260914~ Tran: ACHDW"),
+            ("09/15", "Visa Debit Card Point of Sale Purchase", "$13.07", "", "$1,667.52", "TST* EXAMPLE TACOS Oakland, CA, US"),
+            ("09/30", "Interest Paid", "", "$0.02", "$1,667.54", None),
+            ("09/30", "Ending Balance", "", "", "$1,667.54", None)]
+    def head(y):
+        c.setFont("Helvetica", 8); c.drawString(50, y, "EXAMPLE PERSON Account Number Statement Period"); y -= 11
+        c.drawString(50, y, "EXAMPLE LIVING TRUST 000000000000 September 1-30, 2026"); y -= 20
+        c.setFont("Helvetica-Bold", 9); c.drawString(50, y, "Example Bank Investor Checking Account Number: 000000000000"); y -= 14
+        c.setFont("Helvetica", 8); c.drawString(50, y, "Activity"); y -= 11; c.drawString(50, y, "Date"); y -= 11
+        c.drawString(50, y, "Posted"); c.drawString(90, y, "Description"); c.drawRightString(420, y, "Debits"); c.drawRightString(490, y, "Credits"); c.drawRightString(560, y, "Balance")
+        return y - 14
+    y = head(H - 50); page_break = 6
+    for i, (d, desc, deb, cred, bal, extra) in enumerate(rows):
+        if i == page_break:
+            c.setFont("Helvetica", 7); c.drawString(50, 40, "© 2026 Example Bank, SSB. All rights reserved. Member FDIC. Page 1 of 2"); c.showPage(); y = head(H - 50)
+        c.setFont("Helvetica", 8); c.drawString(50, y, d); c.drawString(90, y, desc)
+        if deb: c.drawRightString(420, y, deb)
+        if cred: c.drawRightString(490, y, cred)
+        c.drawRightString(560, y, bal); y -= 11
+        if extra: c.drawString(90, y, extra); y -= 11
+    c.setFont("Helvetica", 8); c.drawString(50, y - 10, "Checks Paid"); c.drawString(50, y - 21, "101 09/04/2026 $900.00")
+    c.setFont("Helvetica", 7); c.drawString(50, 40, "© 2026 Example Bank, SSB. All rights reserved. Member FDIC. Page 2 of 2")
+    c.save()
+two_line_checking("checking_two_line.pdf")
