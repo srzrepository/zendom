@@ -1778,7 +1778,7 @@ async def test_fund_sources(browser):
     await act(pg, "fundIn")
     opts = await ev(pg, "[...document.querySelectorAll('#fsrc option')].map(o => o.value + '=' + o.textContent)")
     check("fund sources: Add money lists recent income lines (not ones over 90 days old) and New income", any(o.startswith("pay=Stanford · Oct 30 · $2,400.00 left") for o in opts) and not any(o.startswith("old=") for o in opts) and opts[-1].startswith("new="), json.dumps(opts))
-    await fill(pg, {"famt": "3000", "fplace": "Savings account", "fsrc": "pay"}); await submit(pg)
+    await fill(pg, {"famt": "3000", "fsrc": "pay"}); await submit(pg)
     check("fund sources: can't take more than the paycheck", "Only $2,400.00 of “Stanford” is left" in await err_text(pg), await err_text(pg))
     await fill(pg, {"famt": "200"}); await submit(pg)
     st = await stored(pg); e = st["budget"]["fund"]["entries"]
@@ -1787,34 +1787,122 @@ async def test_fund_sources(browser):
     await act(pg, "fundIn")
     check("fund sources: the paycheck now shows $2,200 left", any("$2,200.00 left" in o for o in await ev(pg, "[...document.querySelectorAll('#fsrc option')].map(o => o.textContent)")))
     # gift money as new income
-    await fill(pg, {"famt": "100", "fplace": "Cash jar", "fsrc": "new"}); await submit(pg)
+    await fill(pg, {"famt": "100", "fsrc": "new"}); await submit(pg)
     check("fund sources: new income needs a note", "Say what the income was" in await err_text(pg))
     await fill(pg, {"fnote": "Birthday money from Mom"}); await submit(pg)
     st = await stored(pg); gift = [t for t in st["budget"]["txns"] if t.get("note") == "Birthday money from Mom"]
-    ge = [x for x in st["budget"]["fund"]["entries"] if x.get("place") == "Cash jar"]
+    ge = [x for x in st["budget"]["fund"]["entries"] if x.get("note") == "Birthday money from Mom"]
     check("fund sources: New income logs the income line too, and links it", len(gift) == 1 and gift[0]["kind"] == "income" and gift[0]["amount"] == 10000 and ge and ge[0]["incomeId"] == gift[0]["id"])
     await act(pg, "btab", "spending")
     v = await ev(pg, "document.querySelector('#view').innerText")
     check("fund sources: income lines show how much went to the fund", "$200.00 to the" in v and "$100.00 to the" in v, v[-900:])
     # unlinked still works, and entries saved before this have no link
-    await act(pg, "btab", "fund"); await act(pg, "fundIn"); await fill(pg, {"famt": "20", "fplace": "Cash jar"}); await submit(pg)
+    await act(pg, "btab", "fund"); await act(pg, "fundIn"); await fill(pg, {"famt": "20"}); await submit(pg)
     check("fund sources: Not linked still saves (no link stored)", await ev(pg, "fund().entries.filter(e => !('incomeId' in e)).length") == 1)
     # paycheck: $150 to the fund every payday
     await act(pg, "btab", "spending"); await act(pg, "editPayday")
     await fill(pg, {"pname": "Stanford", "pamt": "2400", "pcycle": "semimonthly", "pday1": "15", "pday2": "31", "pfund": "3000"}); await submit(pg)
     check("fund sources: a payday amount over the paycheck is refused", "more than the paycheck" in await err_text(pg))
-    await fill(pg, {"pfund": "150", "pfplace": "Savings account"}); await submit(pg)
+    await fill(pg, {"pfund": "150"}); await submit(pg)
     pid = await ev(pg, "state.budget.paydays[0].id")
     await act(pg, "gotPay", pid)
     st = await stored(pg); inc = [t for t in st["budget"]["txns"] if t.get("paydayId") == pid][0]
     fe = [x for x in st["budget"]["fund"]["entries"] if x.get("incomeId") == inc["id"]]
-    check("fund sources: Got it also puts $150 in the fund, linked to that paycheck", len(fe) == 1 and fe[0]["amount"] == 15000 and fe[0]["place"] == "Savings account" and fe[0]["who"] == "sam")
+    check("fund sources: Got it also puts $150 in the fund, linked to that paycheck", len(fe) == 1 and fe[0]["amount"] == 15000 and fe[0]["who"] == "sam")
     await act(pg, "undo")
     st = await stored(pg)
     check("fund sources: undo takes back the paycheck and the fund money", not [t for t in st["budget"]["txns"] if t.get("paydayId") == pid] and not [x for x in st["budget"]["fund"]["entries"] if x.get("note") == "From Stanford"])
     await pg.reload(); await pg.wait_for_timeout(300)
     check("fund sources: links survive a reload", await ev(pg, "fund().entries.filter(e => e.incomeId).length") == 2 and await ev(pg, "state.budget.paydays[0].toFund") == 15000)
     check("fund sources: no page errors", not pg.errors, "; ".join(pg.errors))
+    await pg.context.close()
+
+
+async def test_fund_pool(browser):
+    # data from before: places, a move between places, money given straight to a goal
+    old = """(() => { prefs.user = 'sam'; savePrefs(); state.budget.txns = []; state.budget.fund.goals = [{id:'jp', name:'Japan trip', target:300000, by:''}];
+      state.budget.fund.entries = [
+        {id:'a', kind:'in', amount:50000, date:'2026-10-01', who:'sam', place:'Savings account', toPlace:'', goalId:'', note:'Bonus', created:1},
+        {id:'b', kind:'in', amount:20000, date:'2026-10-02', who:'charlie', place:'Cash jar', toPlace:'', goalId:'jp', note:'Birthday money', created:2},
+        {id:'c', kind:'move', amount:10000, date:'2026-10-03', who:'sam', place:'Cash jar', toPlace:'Savings account', goalId:'', note:'', created:3}];
+      save(); ACTIONS.tab('budget'); ACTIONS.btab('fund'); })()"""
+    pg = await new_page(browser, clock="2026-10-30T19:30:00-07:00")
+    await ev(pg, old)
+    v = await ev(pg, "document.querySelector('#view').innerText")
+    check("fund pool: old data keeps its totals ($700 in, $200 in the goal, $500 free)", "$700.00" in v and "$500.00 free to use · $200.00 in goals" in v, v[:500])
+    check("fund pool: no more Where it is / Move", "Where it is" not in v and not await ev(pg, "!!document.querySelector('[data-act=fundMove]')"))
+    check("fund pool: Where it came from sums it up", "Where it came from" in v and "Bonus" in v and "Birthday money" in v)
+    check("fund pool: the old move stays in the ledger, marked", "Moved between places (from before)" in v and "doesn't change any totals" in v)
+    # tap the goal: add from the pool
+    await act(pg, "openGoal", "jp")
+    sh = await ev(pg, "document.querySelector('.sheet').innerText")
+    check("fund pool: tapping a goal shows what's in it and what you can do", "$200.00 of $3,000.00" in sh and "$500.00 is free to use" in sh and "Add from the pool" in sh)
+    await act(pg, "goalAdd", "jp")
+    check("fund pool: Add from the pool starts with what's free (up to the target)", await ev(pg, "document.querySelector('#gmamt').value") == "500")
+    await fill(pg, {"gmamt": "600"}); await submit(pg)
+    check("fund pool: can't add more than is free", "Only $500.00 is free to use" in await err_text(pg))
+    await fill(pg, {"gmamt": "300", "gmnote": "for flights"}); await submit(pg)
+    check("fund pool: $300 moved into the goal; total unchanged", await ev(pg, "[goalSaved('jp'), poolFree(), fundTotal()].join()") == "50000,20000,70000")
+    check("fund pool: back on the goal after adding", await ev(pg, "document.querySelector('#sheetTitle').textContent") == "Japan trip")
+    # move money back out of the goal
+    await act(pg, "goalBack", "jp")
+    await fill(pg, {"gmamt": "900"}); await submit(pg)
+    check("fund pool: can't move back more than the goal has", "Only $500.00 is in this goal" in await err_text(pg))
+    await fill(pg, {"gmamt": "150", "gmnote": "vet bill"}); await submit(pg)
+    check("fund pool: $150 back to the pool", await ev(pg, "[goalSaved('jp'), poolFree()].join()") == "35000,35000")
+    # spend from the goal, then from the pool
+    await act(pg, "goalSpend", "jp")
+    check("fund pool: Spend from it picks that goal", await ev(pg, "document.querySelector('#fgoal').value") == "jp")
+    await fill(pg, {"famt": "400", "fnote": "Flights"}); await submit(pg)
+    check("fund pool: can't spend more than the goal has", "Only $350.00 is in Japan trip" in await err_text(pg), await err_text(pg))
+    await fill(pg, {"famt": "350"}); await submit(pg)
+    check("fund pool: spent from the goal; the pool is untouched", await ev(pg, "[goalSaved('jp'), poolFree(), fundTotal()].join()") == "0,35000,35000")
+    await act(pg, "fundOut"); await fill(pg, {"famt": "400", "fnote": "Dinner"}); await submit(pg)
+    check("fund pool: spending free money is limited to what's free", "Only $350.00 is free to use" in await err_text(pg))
+    await ev(pg, "closeSheet()")
+    # add money straight to the goal
+    await act(pg, "fundIn"); await fill(pg, {"famt": "100", "fnote": "From Grandma", "fgoal": "jp"}); await submit(pg)
+    check("fund pool: money can go straight to a goal", await ev(pg, "goalSaved('jp')") == 10000)
+    led = await ev(pg, "document.querySelector('#view').innerText")
+    check("fund pool: ledger shows moves to and from the goal", "To Japan trip" in led and "Back from Japan trip" in led and "vet bill" in led)
+    # deleting the goal puts its money back
+    await ev(pg, "ACTIONS.editGoal('jp')"); await confirm_delete(pg)
+    check("fund pool: deleting a goal puts its money back in the pool", await ev(pg, "[poolFree(), fundTotal()].join()") == "45000,45000" and "back in the pool" in await ev(pg, "document.body.innerText"))
+    # stored: new kinds survive a reload; no place needed
+    await pg.reload(); await pg.wait_for_timeout(300)
+    kinds = await ev(pg, "fund().entries.map(e => e.kind).sort().join()")
+    check("fund pool: entries survive a reload (assign, release, old move kept)", kinds.count("assign") == 1 and kinds.count("release") == 1 and "move" in kinds, kinds)
+    # editing an old move shows an explanation
+    await ev(pg, "ACTIONS.tab('budget'); ACTIONS.btab('fund'); ACTIONS.editFund('c')")
+    check("fund pool: an old move opens an explanation you can delete", "doesn't track places anymore" in await ev(pg, "document.querySelector('.sheet').innerText"))
+    await ev(pg, "closeSheet()")
+    check("fund pool: no page errors", not pg.errors, "; ".join(pg.errors))
+    await pg.context.close()
+    # empty fund
+    pg = await new_page(browser, clock="2026-10-30T19:30:00-07:00")
+    await ev(pg, "(() => { state.budget.fund.entries = []; state.budget.fund.goals = []; save(); ACTIONS.tab('budget'); ACTIONS.btab('fund'); })()")
+    v = await ev(pg, "document.querySelector('#view').innerText")
+    check("fund pool: empty fund shows how to start; Spend is off", "Tap Add money" in v and await ev(pg, "document.querySelector('[data-act=fundOut]').disabled"))
+    await pg.context.close()
+
+async def test_whats_new(browser):
+    pg = await new_page(browser, storage={"zendom:prefs": json.dumps({"seenBuild": "2026-10-30 · 40", "tab": "today"})}, clock="2026-10-30T19:30:00-07:00")
+    await pg.wait_for_timeout(1400)
+    check("what's new: after an update, a toast offers it", "Updated to version 41" in await ev(pg, "document.querySelector('#toastRoot').innerText"))
+    await act(pg, "undo")
+    sh = await ev(pg, "document.querySelector('.sheet').innerText")
+    check("what's new: lists versions, newest first, marks the one you have", sh.index("Version 41") < sh.index("Version 40") and "You have this" in sh and "Before version numbers" in sh)
+    await ev(pg, "closeSheet()")
+    await pg.reload(); await pg.wait_for_timeout(1400)
+    check("what's new: the toast only shows once per version", "Updated to version" not in await ev(pg, "document.querySelector('#toastRoot').innerText"))
+    await ev(pg, "ACTIONS.tab('more'); ACTIONS.mtab('settings')")
+    await act(pg, "whatsNew")
+    check("what's new: Settings has a What's new link", await ev(pg, "document.querySelector('#sheetTitle').textContent") == "What's new")
+    check("what's new: every version has an entry (latest = this build)", await ev(pg, "BUILD.endsWith('· ' + CHANGELOG[0][0])"))
+    check("what's new: no page errors", not pg.errors, "; ".join(pg.errors))
+    await pg.context.close()
+    pg = await new_page(browser, storage={}, clock="2026-10-30T19:30:00-07:00"); await pg.wait_for_timeout(1400)
+    check("what's new: a brand-new install isn't told it updated", "Updated to version" not in await ev(pg, "document.querySelector('#toastRoot').innerText"))
     await pg.context.close()
 
 
@@ -1848,6 +1936,8 @@ async def main():
         await test_bill_match(browser)
         await test_payment_covers(browser)
         await test_fund_sources(browser)
+        await test_fund_pool(browser)
+        await test_whats_new(browser)
         await browser.close()
     failed = [r for r in results if not r[1]]
     print(f"\n{len(results) - len(failed)} of {len(results)} checks passed")
