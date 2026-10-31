@@ -1675,6 +1675,29 @@ async def test_duplicates(browser):
     await pg.context.close()
 
 
+async def test_bill_match(browser):
+    pg = await new_page(browser, clock="2026-10-30T17:00:00-07:00")
+    await ev(pg, """(() => { prefs.user = 'sam'; savePrefs(); state.budget.categories = [{id:'r', name:'Rent & utilities', limit:0}];
+      state.budget.bills = [{id:'rent', name:'Rent', amount:360000, cycle:'monthly', nextDue:'2026-11-01', anchorDay:1, categoryId:'r', paidBy:'charlie', shared:true, split:{mode:'amt', sam:150000}, autopay:false}];
+      state.budget.txns = []; budgetMonth = '2026-10'; save(); ACTIONS.tab('budget'); ACTIONS.btab('spending'); })()""")
+    await act(pg, "newTxn"); await fill(pg, {"amt": "3600", "tnote": "November rent"}); await submit(pg)
+    e = await err_text(pg)
+    check("bill match: typing rent points to the Rent bill's Paid button", "This looks like your Rent bill ($3,600.00, due Nov 1)" in e and await ev(pg, "!!document.querySelector('[data-act=billFromForm]')"), e)
+    await act(pg, "billFromForm", "rent")
+    st = await stored(pg); tx = st["budget"]["txns"]
+    check("bill match: Use the bill's Paid button logs it once, with the bill's split, and moves the bill on", len(tx) == 1 and tx[0]["billId"] == "rent" and tx[0]["shared"] and tx[0]["split"] == {"mode": "amt", "sam": 150000} and st["budget"]["bills"][0]["nextDue"] == "2026-12-01", json.dumps(tx))
+    check("bill match: Sam owes Charlie her $1,500 part", await ev(pg, "balance()") == -150000)
+    # by name with a different amount, then Save again logs it by hand
+    await act(pg, "newTxn"); await fill(pg, {"amt": "50", "tnote": "rent late fee", "tdate": "2026-11-20"}); await submit(pg)
+    check("bill match: the bill's name near its due date also points to it", "looks like your Rent bill" in await err_text(pg))
+    await submit(pg)
+    check("bill match: Save again logs it by hand", await ev(pg, "state.budget.txns.length") == 2 and not await sheet_open(pg))
+    await act(pg, "newTxn"); await fill(pg, {"amt": "12", "tnote": "Coffee"}); await submit(pg)
+    check("bill match: unrelated spending saves straight away", not await sheet_open(pg))
+    check("bill match: no page errors", not pg.errors, "; ".join(pg.errors))
+    await pg.context.close()
+
+
 async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch()
@@ -1702,6 +1725,7 @@ async def main():
         await test_paydays(browser)
         await test_share_payments(browser)
         await test_duplicates(browser)
+        await test_bill_match(browser)
         await browser.close()
     failed = [r for r in results if not r[1]]
     print(f"\n{len(results) - len(failed)} of {len(results)} checks passed")

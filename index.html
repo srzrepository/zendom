@@ -2951,6 +2951,11 @@ function warnOnce(form, key, fieldId, msg, openId){
   if(f && openId) f.insertAdjacentHTML("beforeend", `<button type="button" class="link" data-act="editTxn" data-id="${esc(openId)}" style="align-self:flex-start;padding-left:0">Open the one you have</button>`);
   return true;
 }
+// A bill this hand-typed spending is probably for: same amount or a word of its name, near its due date
+function billMatch(d){
+  const w = pbWords(d.note);
+  return state.budget.bills.find(b => (b.amount === d.amount || [...pbWords(b.name)].some(x => w.has(x))) && Math.abs(diffDays(d.date, b.nextDue)) <= 20) || null;
+}
 const dupMsg = d => `You already have “${txLabel(d)}” for ${money(d.amount)} on ${niceDate(d.date)}. If this is a different one, tap Save again.`;
 function balanceUntil(day){
   let b = 0;
@@ -3341,6 +3346,9 @@ function txnForm(id, preset){
       details: form.elements.tdetails.value.trim().slice(0, 500), cancelled: form.elements.tcancel.checked};
     if(repays){ data.repays = repays; }
     if(!t){ const dup = dupOf(data); if(dup && warnOnce(form, "dup" + dup.id, "amt", dupMsg(dup), dup.id)) return; }
+    if(!t && kind === "expense"){ const bm = billMatch(data);
+      if(bm && warnOnce(form, "bill" + bm.id, "amt", `This looks like your ${bm.name} bill (${money(bm.amount)}, due ${niceDate(bm.nextDue)}). Logging it here won't move the bill to its next date, so its Paid button would add it again. Use the bill's Paid button, or tap Save again to log it here anyway.`)){
+        $("#f-amt").insertAdjacentHTML("beforeend", `<button type="button" class="link" data-act="billFromForm" data-id="${bm.id}" style="align-self:flex-start;padding-left:0">Use the bill's Paid button</button>`); return; } }
     if(t){ Object.assign(t, data); if(!repays) delete t.repays; else delete t.noRepay; } else state.budget.txns.push(Object.assign({id:uid(), billId:null}, data));
     const pe = repays && state.budget.txns.find(x => x.id === repays);
     budgetMonth = (pe ? pe.date : date).slice(0, 7);   // a payback shows under its expense
@@ -3537,6 +3545,7 @@ const BUDGET_ACTIONS = {
   editCat: id => catForm(id || null),
   editBill: id => billForm(id || null),
   editPayday: id => paydayForm(id || null),
+  billFromForm: id => { closeSheet(); ACTIONS.payBill(id); },
   billSkip: id => { closeSheet(); ACTIONS.payBill(id, null, "skip"); },
   billAdd: id => { closeSheet(); ACTIONS.payBill(id, null, "add"); },
   dupReview: () => { dupSheet.open = true; dupSheet(); },
@@ -5458,7 +5467,7 @@ function toast(msg, undo, label, ms){
   toastTimer = setTimeout(() => { $("#toastRoot").innerHTML = ""; toast.undo = null; }, ms || (undo ? 5000 : 2200));
 }
 /* ---- which version is this, and is there a newer one? ---- */
-const BUILD = "2026-10-30 · 36";
+const BUILD = "2026-10-30 · 37";
 let updateSeen = "";
 async function checkForUpdate(){
   if(!/^https?:$/.test(location.protocol) || navigator.onLine === false) return;
