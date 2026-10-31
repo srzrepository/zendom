@@ -1698,6 +1698,77 @@ async def test_bill_match(browser):
     await pg.context.close()
 
 
+async def test_payment_covers(browser):
+    pg = await new_page(browser, clock="2026-10-30T19:00:00-07:00")
+    # Sam's Oct 30: Charlie paid rent (Sam $1,500) and internet ($50, 50/50); Sam paid $1,500 "Rent" and $25 "internet" before grouping existed
+    seed = """(() => { prefs.user = 'sam'; savePrefs(); state.budget.categories = [{id:'r', name:'Rent & utilities', limit:0}];
+      state.budget.txns = [
+        {id:'rent', kind:'expense', amount:360000, date:'2026-10-30', categoryId:'r', paidBy:'charlie', shared:true, split:{mode:'amt', sam:150000}, note:'Rent', billId:null},
+        {id:'net', kind:'expense', amount:5000, date:'2026-10-30', categoryId:'r', paidBy:'charlie', shared:true, note:'internet', billId:null},
+        {id:'pge', kind:'expense', amount:27393, date:'2026-10-30', categoryId:'r', paidBy:'charlie', shared:true, note:'PG&E October', billId:null},
+        {id:'p1', kind:'settle', amount:150000, date:'2026-10-30', paidBy:'sam', shared:false, categoryId:null, note:'Rent', billId:null},
+        {id:'p2', kind:'settle', amount:2500, date:'2026-10-30', paidBy:'sam', shared:false, categoryId:null, note:'internet', billId:null}];
+      budgetMonth = '2026-10'; save(); ACTIONS.tab('budget'); ACTIONS.btab('spending'); })()"""
+    await ev(pg, seed)
+    bal0 = await ev(pg, "balance()")
+    v = await ev(pg, "document.querySelector('#view').innerText")
+    check("covers: offers to group the 2 earlier payments with rent and internet", "Group 2 payments with what they paid for?" in v and "Sam's $1,500.00 on Oct 30 → Rent" in v and "Sam's $25.00 on Oct 30 → internet" in v, v[:700])
+    await act(pg, "groupYes")
+    st = await stored(pg); tx = {t["id"]: t for t in st["budget"]["txns"]}
+    check("covers: grouped (p1 → rent, p2 → internet)", tx["p1"].get("covers") == ["rent"] and tx["p2"].get("covers") == ["net"])
+    check("covers: grouping doesn't change who owes whom", await ev(pg, "balance()") == bal0)
+    check("covers: payments sit under rent and internet, not on their own", await ev(pg, "(() => { const rows = [...document.querySelectorAll('.txrow')]; const i = rows.findIndex(r => r.dataset.id === 'rent'); return rows[i + 1].dataset.id === 'p1' && rows[i + 1].innerText.includes('Sam paid her share') && !rows.some(r => !r.classList.contains('payback') && r.dataset.id === 'p1'); })()"))
+    check("covers: rent says Sam's part is paid", "Sam's part paid ✓" in await ev(pg, "document.querySelector('.txrow[data-id=rent]').innerText"))
+    check("covers: PG&E isn't marked paid", "part paid" not in await ev(pg, "document.querySelector('.txrow[data-id=pge]').innerText"))
+    # one Venmo payment covering two costs: Sam pays $136.97 for PG&E only... then one $161.97 covering PG&E + another
+    await ev(pg, "(() => { state.budget.txns.push({id:'gro', kind:'expense', amount:5000, date:'2026-10-29', categoryId:'r', paidBy:'charlie', shared:true, note:'Groceries', billId:null}); save(); render(); })()")
+    await act(pg, "settleUp")
+    pre = await ev(pg, "[...document.querySelectorAll('input[name=scov]')].map(x => x.value + (x.checked ? '*' : '')).join()")
+    check("covers: a new payment starts with what's shared since you were last even ticked", "pge*" in pre and "gro*" in pre and "rent" not in pre, pre)
+    await fill(pg, {"samt": "161.97", "smemo": "PG&E + groceries"}); await submit(pg)
+    st = await stored(pg); p3 = [t for t in st["budget"]["txns"] if t.get("note") == "PG&E + groceries"][0]
+    check("covers: one payment covering two costs saves both", sorted(p3.get("covers", [])) == ["gro", "pge"], json.dumps(p3))
+    check("covers: it shows under both, as part of a $161.97 payment", await ev(pg, "[...document.querySelectorAll('.txrow.payback')].filter(r => r.innerText.includes('part of a $161.97 payment')).length") == 2)
+    check("covers: both say Sam's part paid", all(["Sam's part paid ✓" in await ev(pg, f"document.querySelector('.txrow[data-id={i}]').innerText") for i in ("pge", "gro")]))
+    check("covers: and you're even (within a cent of rounding)", abs(await ev(pg, "balance()")) <= 1, str(await ev(pg, "balance()")))
+    # partial: edit the payment down to $100 -> groceries (older) fully, PG&E partly
+    await ev(pg, f"ACTIONS.editTxn('{p3['id']}')"); await fill(pg, {"samt": "100"}); await submit(pg)
+    g = await ev(pg, "document.querySelector('.txrow[data-id=gro]').innerText"); pp = await ev(pg, "document.querySelector('.txrow[data-id=pge]').innerText")
+    check("covers: a smaller payment pays the older cost first, then part of the next", "Sam's part paid ✓" in g and "Sam paid $75.00 of $136.97" in pp, pp)
+    # switching who paid redraws the list
+    await act(pg, "settleUp"); await pg.locator('#sheetForm input[name=paidBy][value=charlie]').check(); await pg.wait_for_timeout(60)
+    check("covers: switching who paid shows Charlie's costs instead (none here)", await ev(pg, "document.querySelectorAll('input[name=scov]').length") == 0)
+    await ev(pg, "closeSheet()")
+    # I paid Charlie my share: pre-ticked
+    await ev(pg, "(() => { state.budget.txns.push({id:'cat', kind:'expense', amount:8000, date:'2026-10-30', categoryId:'r', paidBy:'charlie', shared:true, note:'Cat food', billId:null}); save(); render(); ACTIONS.editTxn('cat'); })()")
+    await act(pg, "payShare", "cat")
+    check("covers: 'I paid Charlie my share' ticks just that cost", await ev(pg, "[...document.querySelectorAll('input[name=scov]:checked')].map(x => x.value).join()") == "cat")
+    await submit(pg)
+    if await sheet_open(pg): await submit(pg)
+    check("covers: and groups it", "Sam's part paid ✓" in await ev(pg, "document.querySelector('.txrow[data-id=cat]').innerText"))
+    # Venmo import: a $40 payment = cat food? no - cat food is paid; a $25 + $25 pair
+    await ev(pg, "(() => { state.budget.txns.push({id:'a1', kind:'expense', amount:5000, date:'2026-10-28', categoryId:'r', paidBy:'charlie', shared:true, note:'Tacos', billId:null}, {id:'a2', kind:'expense', amount:3400, date:'2026-10-27', categoryId:'r', paidBy:'charlie', shared:true, note:'Movies', billId:null}); save(); render(); })()")
+    csv = chr(10).join(["Username,ID,Datetime,Type,Status,Note,From,To,Amount (total)", ",9,2026-10-30T18:00:00,Payment,Complete,tacos and movies,Samantha Zenteno,Charlie Purdom,- $42.00", ""])
+    await pg.evaluate("c => importPreview(buildImport(c, 'venmo.csv'))", csv)
+    sel = await ev(pg, "(() => { const s = document.querySelector('select[data-change=impCover]'); return s ? [s.value, s.options[0].textContent] : null; })()")
+    check("covers import: a Venmo payment adding up to tacos + movies is offered grouped", sel and sel[0] == "1" and "Tacos" in sel[1] and "Movies" in sel[1], json.dumps(sel))
+    await submit(pg)
+    st = await stored(pg); vp = [t for t in st["budget"]["txns"] if t.get("source") == "venmo"][0]
+    check("covers import: imported grouped with both", vp["kind"] == "settle" and sorted(vp.get("covers", [])) == ["a1", "a2"], json.dumps(vp))
+    check("covers: Sam still owes the rest of PG&E (about $61.97) after all that", abs(await ev(pg, "balance()") + 6197) <= 1, str(await ev(pg, "balance()")))
+    # stored data: covers only on payments; reload keeps them
+    await ev(pg, "(() => { const raw = JSON.parse(localStorage.getItem('zendom:data')); raw.budget.txns.find(t => t.id === 'rent').covers = ['x']; localStorage.setItem('zendom:data', JSON.stringify(raw)); })()")
+    await pg.reload(); await pg.wait_for_timeout(300)
+    check("covers: kept through a reload, and dropped from non-payments", await ev(pg, "!('covers' in state.budget.txns.find(t => t.id === 'rent')) && state.budget.txns.find(t => t.id === 'p1').covers[0] === 'rent'"))
+    # Not now: no card
+    await ev(pg, """(() => { state.budget.txns.push({id:'z1', kind:'expense', amount:2000, date:'2026-10-30', categoryId:'r', paidBy:'charlie', shared:true, note:'Soap', billId:null}, {id:'zp', kind:'settle', amount:1000, date:'2026-10-30', paidBy:'sam', shared:false, categoryId:null, note:'', billId:null}); save(); ACTIONS.tab('budget'); ACTIONS.btab('spending'); })()""")
+    check("covers: a new matching payment brings the card back", "Group a payment" in await ev(pg, "document.querySelector('#view').innerText"))
+    await act(pg, "groupNo")
+    check("covers: Not now hides it", "Group a payment" not in await ev(pg, "document.querySelector('#view').innerText") and await ev(pg, "state.budget.txns.find(t => t.id === 'zp').noCover === true"))
+    check("covers: no page errors", not pg.errors, "; ".join(pg.errors))
+    await pg.context.close()
+
+
 async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch()
@@ -1726,6 +1797,7 @@ async def main():
         await test_share_payments(browser)
         await test_duplicates(browser)
         await test_bill_match(browser)
+        await test_payment_covers(browser)
         await browser.close()
     failed = [r for r in results if not r[1]]
     print(f"\n{len(results) - len(failed)} of {len(results)} checks passed")

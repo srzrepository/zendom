@@ -2927,6 +2927,47 @@ function paybackCands(inc){
 }
 const bestPayback = inc => paybackCands(inc).find(c => c.hit && c.fits) || null;
 const expLabel = t => t.note || catName(t.categoryId);
+/* ---- payments between you: what they paid for ---- */
+const sumAmt = l => (l || []).reduce((a, x) => a + x.amt, 0);
+const hisHer = h => h === "sam" ? "her" : "his";
+// expense id -> [{p: payment, amt}]: each payment's amount spread over the costs it covers, oldest first,
+// up to what the payer owed on each. txs: netTx() (paybacks already taken off).
+function coverMap(txs){
+  const byId = new Map(txs.map(t => [t.id, t])), alloc = new Map();
+  txs.filter(t => t.kind === "settle" && !t.cancelled && Array.isArray(t.covers) && t.covers.length).sort((a, b) => a.date.localeCompare(b.date)).forEach(p => {
+    let left = p.amount;
+    p.covers.map(id => byId.get(id)).filter(e => e && e.kind === "expense" && e.shared && !e.cancelled && e.paidBy === other(p.paidBy))
+      .sort((a, b) => a.date.localeCompare(b.date)).forEach(e => {
+        const owed = Math.round(shareOf(e, p.paidBy)), amt = Math.max(0, Math.min(left, owed - sumAmt(alloc.get(e.id))));
+        if(!alloc.has(e.id)) alloc.set(e.id, []); alloc.get(e.id).push({p, amt}); left -= amt; });
+  });
+  return alloc;
+}
+// The costs a payment covers that still exist
+const coveredBy = (p, txs) => (p.covers || []).map(id => txs.find(t => t.id === id)).filter(e => e && e.kind === "expense" && !e.cancelled);
+// Shared costs a payer owes on, with what's left (excluding one payment, when editing it)
+function coverCands(payer, exceptId){
+  const net = netTx(), cm = coverMap(net.filter(x => x.id !== exceptId)), t0 = todayStr();
+  return net.filter(e => e.kind === "expense" && e.shared && !e.cancelled && isDate(e.date) && e.paidBy === other(payer) && diffDays(e.date, t0) <= 150)
+    .map(e => { const owed = Math.round(shareOf(e, payer)); return {e, owed, left: owed - sumAmt((cm.get(e.id) || []).filter(x => x.p.id !== exceptId))}; });
+}
+// Costs a payment most likely paid for: ones that add up exactly to it (1 to 3 of them). Null if none.
+function coverGuess(payer, amount, date, note, exceptId){
+  const words = pbWords(note), c = coverCands(payer, exceptId).filter(x => x.left > 0 && x.e.date <= addDays(date, 3) && diffDays(x.e.date, date) <= 90)
+    .map(x => Object.assign(x, {hit: [...pbWords(expLabel(x.e))].some(w => words.has(w))}))
+    .sort((a, b) => (b.hit - a.hit) || b.e.date.localeCompare(a.e.date)).slice(0, 12);
+  const ok = n => Math.abs(n - amount) <= 1;
+  for(const x of c) if(ok(x.left)) return [x.e.id];
+  for(let i = 0; i < c.length; i++) for(let j = i + 1; j < c.length; j++) if(ok(c[i].left + c[j].left)) return [c[i].e.id, c[j].e.id];
+  for(let i = 0; i < c.length; i++) for(let j = i + 1; j < c.length; j++) for(let k = j + 1; k < c.length; k++) if(ok(c[i].left + c[j].left + c[k].left)) return [c[i].e.id, c[j].e.id, c[k].e.id];
+  return null;
+}
+// Shared costs since you were last even that this person owes on (what a new payment usually covers)
+function sinceEvenFor(payer){
+  const L = oweLedger(); let start = 0;
+  for(let i = L.length - 1; i >= 0; i--) if(Math.round(L[i].run) === 0){ start = i + 1; break; }
+  return L.slice(start).filter(x => x.t.kind === "expense" && x.t.paidBy === other(payer)).map(x => x.t.id);
+}
 /* ---- duplicates ---- */
 const sameDupKind = (a, b) => a.kind === b.kind && a.amount === b.amount && (a.kind !== "settle" || a.paidBy === b.paidBy);
 // An existing entry that looks like the same thing: same kind and amount within 3 days (payments: same payer)
@@ -3094,7 +3135,7 @@ function oweSheet(all){
   openSheet(bal === 0 ? "You're even" : `${who(bal)} ${money(Math.abs(bal))}`, `
     <p class="small muted" style="margin:0">${all || start === 0 ? "Every shared cost and payment between you." : `Since you were last even (${esc(niceDate(L[start - 1].t.date))}).`} Each line shows how it moved the balance, and the running total on the right.</p>
     ${rows.length ? `<div>${rows.map(({t, eff, run}) => { const sm = Math.round(samPart(t));
-      const sub = t.kind === "income" ? `${esc(niceDate(t.date))} · ${esc(nameOf(t.paidBy))} got ${money(t.amount)} back for “${esc(expLabel(t.linked))}”, which ${esc(nameOf(t.linked.paidBy))} paid for` : t.kind === "settle" ? `${esc(nameOf(t.paidBy))} paid ${esc(nameOf(other(t.paidBy)))}` : `${esc(nameOf(t.paidBy))} paid ${money(t.gross || t.amount)}${t.repaid ? ` − ${money(t.repaid)} paid back` : ""} · ${esc(nameOf("sam"))} ${money(sm)}, ${esc(nameOf("charlie"))} ${money(t.amount - sm)}`;
+      const sub = t.kind === "income" ? `${esc(niceDate(t.date))} · ${esc(nameOf(t.paidBy))} got ${money(t.amount)} back for “${esc(expLabel(t.linked))}”, which ${esc(nameOf(t.linked.paidBy))} paid for` : t.kind === "settle" ? `${esc(nameOf(t.paidBy))} paid ${esc(nameOf(other(t.paidBy)))}${t.covers && t.covers.length ? ` · for ${esc(coveredBy(t, state.budget.txns).map(expLabel).join(", "))}` : ""}` : `${esc(nameOf(t.paidBy))} paid ${money(t.gross || t.amount)}${t.repaid ? ` − ${money(t.repaid)} paid back` : ""} · ${esc(nameOf("sam"))} ${money(sm)}, ${esc(nameOf("charlie"))} ${money(t.amount - sm)}`;
       return `<button type="button" class="owerow owebtn" data-act="editTxn" data-id="${t.id}" style="width:100%"><span class="ot">${esc(t.note || (t.kind === "settle" ? "Payment between you" : catName(t.categoryId)))}</span>
         <span class="ov">${esc(sign(eff).replace("even", "—"))}</span><span class="os">${esc(niceDate(t.date))} · ${sub}</span><span class="or">${Math.round(run) === 0 ? "even" : `${money(Math.abs(Math.round(run)))} ${run > 0 ? "→ " + esc(nameOf("sam")) : "→ " + esc(nameOf("charlie"))}`}</span></button>`; }).join("")}</div>`
       : `<div class="empty"><p>No shared costs or payments yet.</p></div>`}
@@ -3149,7 +3190,9 @@ function viewBudget(){
   const pays = state.budget.paydays.filter(p => !who || p.who === who).slice().sort((a, b) => payActual(a, a.next).localeCompare(payActual(b, b.next)));
   const mEnd = toStr(new Date(+k.slice(0, 4), +k.slice(5, 7), 0)), mFrom = k < todayStr().slice(0, 7) ? null : `${k}-01`;
   const expect = mFrom ? expectedPay(mFrom, mEnd, who) : 0;
-  const listTx = st.tx.filter(t => !t.linked || t.linked.date.slice(0, 7) !== k);   // paybacks sit under their expense; from another month they show here, not counted
+  const NET = netTx(), CM = coverMap(NET);
+  const covInMonth = t => { const c = coveredBy(t, NET); return c.length && c.every(e => e.date.slice(0, 7) === k); };
+  const listTx = st.tx.filter(t => (!t.linked || t.linked.date.slice(0, 7) !== k) && !(t.kind === "settle" && covInMonth(t)));   // paybacks sit under their expense; from another month they show here, not counted
   const days = [...new Set(listTx.map(t => t.date))].sort().reverse();
   const hasShared = state.budget.txns.some(t => t.shared || t.kind === "settle");
   return `
@@ -3168,7 +3211,7 @@ function viewBudget(){
     <div class="stat"><span class="label">${who ? `${esc(nameOf(who))}'s share` : "Spent"}</span><b>${money(st.spent)}</b>${who ? `<span class="small muted">${money(ps.paid)} paid by ${esc(nameOf(who))}</span>` : st.budgeted ? `<span class="small muted">of ${money(st.budgeted)} budgeted</span>` : ""}</div>
     <div class="stat"><span class="label">${who ? `${esc(nameOf(who))}'s income` : "Income"}</span><b>${money(st.income)}</b><span class="small muted">${st.income ? `${money(Math.abs(st.income - st.spent))} ${st.income >= st.spent ? "after spending" : "short"}` : "None logged"}</span>${expect ? `<span class="small muted expect">+ ${money(expect)} expected by ${esc(niceDate(mEnd))}</span>` : ""}</div>
   </div>
-  ${dupCardHTML()}${paybackHintHTML()}
+  ${dupCardHTML()}${groupHintHTML()}${paybackHintHTML()}
   ${hasShared ? `<section class="card settle"><div><span class="label">Shared spending</span>
       <p style="margin:2px 0 0;font-weight:600"><button type="button" class="owebtn" data-act="oweDetail">${bal === 0 ? "You're even." : `<u>${bal > 0 ? "Charlie owes Sam" : "Sam owes Charlie"} ${money(Math.abs(bal))}</u>`}</button></p>
       <span class="small muted">Tap to see what makes it up.</span></div>
@@ -3204,14 +3247,27 @@ function viewBudget(){
         <span class="av ${t.paidBy}">${sprite(t.paidBy, "", true)}</span>
         <span class="tb"><span class="tt">${esc(t.note || (t.kind === "settle" ? "Payment between you" : t.kind === "income" ? "Income" : catName(t.categoryId)))}</span>
           <span class="ts">${t.cancelled ? `<span class="pill late">${t.kind === "income" ? "Didn't come in" : "Cancelled"}</span> ` : ""}${t.kind === "expense" ? `${esc(catName(t.categoryId))}${t.shared ? " · " + esc(splitLabel(t)) : ` · ${esc(nameOf(t.paidBy))}'s`}` : t.kind === "settle" ? `${esc(nameOf(t.paidBy))} paid ${esc(nameOf(other(t.paidBy)))}` : `${esc(nameOf(t.paidBy))}`}</span>
-          ${t.repaid ? `<span class="td">${money(t.gross)} − ${money(t.repaid)} paid back</span>` : ""}${t.linked ? `<span class="td">Pays back “${esc(expLabel(t.linked))}” (${esc(niceDate(t.linked.date))}) · counted there</span>` : ""}
+          ${t.repaid ? `<span class="td">${money(t.gross)} − ${money(t.repaid)} paid back</span>` : ""}${coverStatus(t, CM)}${t.kind === "settle" && t.covers && t.covers.length ? `<span class="td">For ${esc(coveredBy(t, NET).map(expLabel).join(", ") || "costs that were deleted")}</span>` : ""}${t.linked ? `<span class="td">Pays back “${esc(expLabel(t.linked))}” (${esc(niceDate(t.linked.date))}) · counted there</span>` : ""}
           ${t.details ? `<span class="td">${esc(t.details)}</span>` : ""}${who && t.kind === "expense" && t.shared ? `<span class="td">${esc(nameOf(who))}'s part: ${money(Math.round(shareOf(t, who)))}</span>` : ""}</span>
-        <span class="ta ${t.kind}">${t.linked ? `(${money(t.amount)})` : (t.kind === "income" ? "+" : "") + money(t.amount)}</span></button>${paybackRows(t)}`).join("")}</div></div>`).join("")
+        <span class="ta ${t.kind}">${t.linked ? `(${money(t.amount)})` : (t.kind === "income" ? "+" : "") + money(t.amount)}</span></button>${paybackRows(t)}${coverRows(t, CM)}`).join("")}</div></div>`).join("")
       : `<div class="empty"><p>${who ? `Nothing for ${esc(nameOf(who))} in ${esc(monthName(k))}.` : `No spending logged for ${esc(monthName(k))}.`}</p>${isNow ? `<button type="button" class="btn" data-act="newTxn">${IC.plus} Add spending</button>` : ""}</div>`}
   </section>
   <p class="private">${IC.lock} ${sync.status === "on" ? "Shared only between your two accounts." : "Stored only on this device."} Nothing connects to your bank.</p>`;
 }
 
+// Payments between you under the cost they paid for
+function coverRows(t, CM){
+  const l = t.kind === "expense" && CM.get(t.id); if(!l || !l.length) return "";
+  return l.map(({p, amt}) => `<button type="button" class="txrow payback" data-act="editTxn" data-id="${p.id}">
+    <span class="pbarrow" aria-hidden="true">↳</span><span class="tb"><span class="tt">${esc(nameOf(p.paidBy))} paid ${hisHer(p.paidBy)} share</span>
+    <span class="ts">${esc(niceDate(p.date))}${p.covers.length > 1 ? ` · part of a ${money(p.amount)} payment` : ""}${p.note ? ` · ${esc(cutText(p.note, 30))}` : ""}</span></span>
+    <span class="ta settle">${money(amt)}</span></button>`).join("");
+}
+function coverStatus(t, CM){
+  const l = t.kind === "expense" && t.shared && CM.get(t.id); if(!l || !l.length) return "";
+  const ower = other(t.paidBy), owed = Math.round(shareOf(t, ower)), paid = sumAmt(l);
+  return `<span class="td">${paid >= owed ? `${esc(nameOf(ower))}'s part paid ✓` : `${esc(nameOf(ower))} paid ${money(paid)} of ${money(owed)}`}</span>`;
+}
 // The paybacks under an expense in the list
 function paybackRows(t){
   if(!t.paybacks) return "";
@@ -3227,6 +3283,23 @@ function paybackHint(){
     .sort((a, b) => b.date.localeCompare(a.date));
   for(const inc of incs){ const c = bestPayback(inc); if(c) return {inc, c}; }
   return null;
+}
+// Earlier payments that add up exactly to some costs: offer to group them (one card for all)
+function groupSuggestions(){
+  const taken = new Set(), t0 = todayStr(), out = [];
+  state.budget.txns.filter(t => t.kind === "settle" && !t.cancelled && !(t.covers && t.covers.length) && !t.noCover && isDate(t.date) && diffDays(t.date, t0) <= 120)
+    .sort((a, b) => a.date.localeCompare(b.date)).forEach(p => {
+      const g = coverGuess(p.paidBy, p.amount, p.date, p.note, p.id);
+      if(g && !g.some(id => taken.has(id))){ g.forEach(id => taken.add(id)); out.push({p, ids: g}); } });
+  return out;
+}
+function groupHintHTML(){
+  const G = groupSuggestions(); if(!G.length) return "";
+  const lbl = id => { const e = state.budget.txns.find(t => t.id === id); return e ? expLabel(e) : ""; };
+  return `<section class="card soon-card grouphint"><span class="ic">${IC.budget}</span><div style="flex:1;min-width:0">
+    <h3>Group ${G.length === 1 ? "a payment" : G.length + " payments"} with what ${G.length === 1 ? "it" : "they"} paid for?</h3>
+    <p>${G.slice(0, 3).map(x => `${esc(nameOf(x.p.paidBy))}'s ${money(x.p.amount)} on ${esc(niceDate(x.p.date))} → ${esc(x.ids.map(lbl).join(" + "))}`).join("<br>")}${G.length > 3 ? `<br>and ${G.length - 3} more` : ""}</p>
+    <div class="actions" style="margin-top:8px;justify-content:flex-start"><button type="button" class="btn small" data-act="groupYes">Group them</button><button type="button" class="link" data-act="groupNo">Not now</button></div></div></section>`;
 }
 function paybackHintHTML(){
   const h = paybackHint(); if(!h) return "";
@@ -3370,6 +3443,7 @@ function settleForm(id, preset, replaces){
     <div class="two">${field("samt","Amount", `<input id="samt" name="samt" inputmode="decimal" value="${esc(centsToInput(d.amount))}">`)}
     ${field("sdate","Date", `<input id="sdate" name="sdate" type="date" value="${esc(d.date)}">`)}</div>
     ${field("smemo","Memo", `<input id="smemo" name="smemo" maxlength="80" value="${esc(d.note || "")}" placeholder="What it's for, e.g. October rent + groceries" autocomplete="off">`, t ? "" : "Pre-filled with what it covers. Change it to anything.")}
+    <div id="covBox"></div>
     ${!t ? `<div id="venmoRow">${vu ? `<button type="button" class="btn ghost" data-act="settleVenmo" style="align-self:flex-start">Pay in Venmo and record it</button><span class="hint" style="display:block;margin-top:4px">Opens Venmo with the same amount and memo.</span>` : `<span class="hint">Add your Venmo usernames in ${esc(state.budget.pigName)}'s settings to pay from here.</span>`}</div>` : ""}
     ${footer(t ? "delTxn:" + t.id : "")}`,
   form => {
@@ -3378,18 +3452,42 @@ function settleForm(id, preset, replaces){
     if(amount === null) return fail("samt","Enter an amount like 20 or 42.50.");
     if(!isDate(date)) return fail("sdate","Pick a valid date.");
     if(!HUMANS.includes(paidBy)) return fail("samt","Pick who paid.");
-    const data = {kind:"settle", amount, date, paidBy, shared:false, categoryId:null, note: val(form, "smemo").slice(0, 80)};
+    const covers = [...form.querySelectorAll("input[name=scov]:checked")].map(x => x.value);
+    const data = {kind:"settle", amount, date, paidBy, shared:false, categoryId:null, note: val(form, "smemo").slice(0, 80), covers: covers.length ? covers : null};
     if(!t){
       const dup = dupOf(data); if(dup && warnOnce(form, "dup" + dup.id, "samt", dupMsg(dup), dup.id)) return;
       const nb = bal + (paidBy === "charlie" ? -amount : amount), owes = paidBy === "sam" ? Math.max(0, -bal) : Math.max(0, bal);
       if(amount > owes + 100 && Math.sign(nb) === (paidBy === "sam" ? 1 : -1) && warnOnce(form, "over" + paidBy + amount, "samt",
         `${owes ? `${nameOf(paidBy)} only owes ${money(owes)} right now` : `${nameOf(paidBy)} doesn't owe anything right now`}, so this would leave ${nameOf(other(paidBy))} owing ${money(Math.abs(nb))}. If that's right, tap Save again.`)) return;
     }
-    if(t) applyEdit(t, data); else state.budget.txns.push(Object.assign({id:uid(), billId:null}, data, settleForm.via ? {source:settleForm.via} : {}));
+    if(t){ applyEdit(t, data); if(!t.covers) delete t.covers; else delete t.noCover; }
+    else { const nt = Object.assign({id:uid(), billId:null}, data, settleForm.via ? {source:settleForm.via} : {}); if(!nt.covers) delete nt.covers; state.budget.txns.push(nt); }
     if(!t && replaces) removeBy(state.budget.txns, replaces);   // a payback that was really a payment between you
     settleForm.via = null;
-    save(); closeSheet(); render(); toast("Payment recorded");
+    save(); closeSheet(); render(); toast(covers.length ? `Payment recorded · grouped under ${covers.length === 1 ? "what it paid for" : covers.length + " costs"}` : "Payment recorded");
   });
+  // "What does it cover?": rebuilt when you change who paid
+  const pre = t ? (t.covers || []) : (d.covers || sinceEvenFor(d.paidBy));
+  const drawCov = () => {
+    const form = $("#sheetForm"); if(!form) return;
+    const who = (form.querySelector("input[name=paidBy]:checked") || {}).value || d.paidBy;
+    const had = new Set([...form.querySelectorAll("input[name=scov]:checked")].map(x => x.value)), first = !form.dataset.covDrawn;
+    const all = coverCands(who, t ? t.id : null), open = new Set(all.filter(c => c.left > 0).map(c => c.e.id));
+    const keep = first ? new Set(who === d.paidBy ? pre.filter(id => t || open.has(id)) : []) : had;   // a new payment: only costs with something left
+    const list = all.filter(c => c.left > 0 || keep.has(c.e.id)).sort((a, b) => b.e.date.localeCompare(a.e.date)).slice(0, 30);
+    $("#covBox").innerHTML = list.length ? `<div class="field" id="f-scovers"><span class="lab">What does it cover?</span>
+      <div class="glist covlist">${list.map(c => `<label class="txrow" style="cursor:pointer"><input type="checkbox" name="scov" value="${c.e.id}" data-left="${Math.max(0, c.left)}" ${keep.has(c.e.id) ? "checked" : ""} style="accent-color:var(--accent);flex:none">
+        <span class="tb"><span class="tt">${esc(expLabel(c.e))}</span><span class="ts">${esc(niceDate(c.e.date))} · ${esc(nameOf(who))}'s part ${money(c.owed)}${c.left < c.owed ? ` · ${money(Math.max(0, c.left))} left` : ""}</span></span></label>`).join("")}</div>
+      <span class="hint" id="scovsum"></span></div>` : "";
+    form.dataset.covDrawn = "1"; sumCov();
+  };
+  const sumCov = () => { const form = $("#sheetForm"), h = $("#scovsum"); if(!form || !h) return;
+    const ch = [...form.querySelectorAll("input[name=scov]:checked")], tot = ch.reduce((a, x) => a + +x.dataset.left, 0), amt = parseMoney(val(form, "samt")) || 0;
+    h.textContent = !ch.length ? "Optional. Ticking what it paid for groups it under those in your list." : `Ticked: ${money(tot)}${amt && Math.abs(tot - amt) > 1 ? ` · the payment is ${money(amt)}` : " ✓"}`; };
+  const f0 = $("#sheetForm");
+  f0.addEventListener("change", e => { if(e.target.name === "paidBy") drawCov(); else sumCov(); });
+  f0.addEventListener("input", e => { if(e.target.name === "samt") sumCov(); });
+  drawCov();
 }
 // Venmo: record the payment, then open Venmo with the same amount and memo
 function settleVenmo(){
@@ -3549,6 +3647,9 @@ const BUDGET_ACTIONS = {
   billFromForm: id => { closeSheet(); ACTIONS.payBill(id); },
   billSkip: id => { closeSheet(); ACTIONS.payBill(id, null, "skip"); },
   billAdd: id => { closeSheet(); ACTIONS.payBill(id, null, "add"); },
+  groupYes: () => { const G = groupSuggestions(); G.forEach(x => { x.p.covers = x.ids; }); save(); render();
+    toast(`Grouped ${G.length} payment${G.length === 1 ? "" : "s"}`, () => { G.forEach(x => { delete x.p.covers; }); save(); render(); }); },
+  groupNo: () => { const G = groupSuggestions(); G.forEach(x => { x.p.noCover = true; }); save(); render(); toast("OK. You can still tick what a payment covers by opening it."); },
   dupReview: () => { dupSheet.open = true; dupSheet(); },
   dupKeep: id => { const [a, b] = String(id).split("|"), A = state.budget.txns.find(t => t.id === a), B = state.budget.txns.find(t => t.id === b); if(!A || !B) return;
     B.notDup = [...new Set([...(B.notDup || []), A.id])]; save(); render(); if(dupPairs().length) dupSheet(); else { closeSheet(); toast("OK, keeping both"); } },
@@ -3559,10 +3660,10 @@ const BUDGET_ACTIONS = {
     toast(`${money(p.amount)} logged · next payday ${niceDate(payActual(p, p.next))}`, () => { state.budget.txns = state.budget.txns.filter(x => x.id !== tx.id); p.next = prev; save(); render(); }); },
   payShare: id => { const e = state.budget.txns.find(x => x.id === id && x.kind === "expense"); if(!e) return;
     const nt = netTx().find(x => x.id === id) || e, ower = other(e.paidBy); closeSheet();
-    settleForm(null, {amount: Math.round(shareOf(nt, ower)), paidBy: ower, note: expLabel(e), date: todayStr()}); },
+    settleForm(null, {amount: Math.round(shareOf(nt, ower)), paidBy: ower, note: expLabel(e), date: todayStr(), covers: [e.id]}); },
   pbToSettle: id => { const r = state.budget.txns.find(x => x.id === id && x.kind === "income"); if(!r) return;
     const e = state.budget.txns.find(x => x.id === r.repays) || {}; closeSheet();
-    settleForm(null, {amount: r.amount, date: r.date, note: r.note || expLabel(e), paidBy: e.paidBy ? other(e.paidBy) : r.paidBy}, r.id); },
+    settleForm(null, {amount: r.amount, date: r.date, note: r.note || expLabel(e), paidBy: e.paidBy ? other(e.paidBy) : r.paidBy, covers: e.id ? [e.id] : []}, r.id); },
   addPayback: id => { const e = state.budget.txns.find(x => x.id === id && x.kind === "expense"); if(!e) return; closeSheet();
     txnForm(null, {kind:"income", repays:e.id, paidBy:e.paidBy, date: todayStr() >= e.date ? todayStr() : e.date, note:""}); },
   pbPair: id => { const inc = state.budget.txns.find(x => x.id === id && x.kind === "income"); if(!inc) return; const c = bestPayback(inc); if(!c) return;
@@ -3599,7 +3700,9 @@ function normalizeBudget(raw){
     txns: objs(b.txns).filter(t => isDate(t.date) && cents(t.amount) && ["expense","income","settle"].includes(t.kind)).map(t => Object.assign({}, t, {
       id: t.id ? String(t.id) : uid(), amount: cents(t.amount), paidBy: HUMANS.includes(t.paidBy) ? t.paidBy : "sam",
       categoryId: t.kind === "expense" && catIds.has(t.categoryId) ? t.categoryId : null, shared: t.kind === "expense" && !!t.shared, split: t.kind === "expense" && t.shared ? cleanSplit(t.split, cents(t.amount)) : null, note: str(t.note, 80), details: str(t.details, 500), cancelled: !!t.cancelled, billId: t.billId ? String(t.billId) : null }))
-      .map(t => { if(Array.isArray(t.notDup)) t.notDup = t.notDup.map(String).slice(0, 50); else delete t.notDup;
+      .map(t => { if(t.kind === "settle" && Array.isArray(t.covers) && t.covers.length) t.covers = [...new Set(t.covers.map(String))].slice(0, 50); else delete t.covers;
+        if(t.kind === "settle" && t.noCover) t.noCover = true; else delete t.noCover;
+        if(Array.isArray(t.notDup)) t.notDup = t.notDup.map(String).slice(0, 50); else delete t.notDup;
         if(t.kind !== "income" || !t.repays) delete t.repays; else t.repays = String(t.repays); if(t.kind !== "income" || !t.noRepay) delete t.noRepay; else t.noRepay = true; return t; }),
     bills: objs(b.bills).filter(x => str(x.name).trim() && cents(x.amount) && isDate(x.nextDue)).map(x => Object.assign({}, x, {
       id: x.id ? String(x.id) : uid(), name: str(x.name, 40).trim(), amount: cents(x.amount), cycle: BILL_CYCLES[x.cycle] ? x.cycle : "monthly",
@@ -3865,6 +3968,14 @@ function buildImport(text, fileName){
   return {fmt, fileName, rows:out, owner, ownerDetected: !!personFor(selfName), flip, shared:false, partner:partnerGuess, parties:others};
 }
 // For money in: up to 3 expenses it might pay back (shared word + amount fits). Starts as plain income.
+// A payment with your partner that adds up exactly to some shared costs: offered grouped with them
+function impCoverPick(x, k){
+  const key = k.paidBy + Math.abs(x.cents);
+  if(x.covKey !== key){ x.covKey = key; x.covGuess = coverGuess(k.paidBy, Math.abs(x.cents), x.date, x.note || x.desc); x.covers = x.covGuess; }
+  if(!x.covGuess) return "";
+  const lbl = x.covGuess.map(id => expLabel(state.budget.txns.find(t => t.id === id) || {})).join(" + ");
+  return `<select class="ic" data-change="impCover" data-id="${x.i}" aria-label="What this payment covers"><option value="1" ${x.covers ? "selected" : ""}>For ${esc(cutText(lbl, 40))}</option><option value="" ${x.covers ? "" : "selected"}>Don't group it</option></select>`;
+}
 function impRepayPick(x){
   if(!x.pb) x.pb = paybackCands({amount: Math.abs(x.cents), date: x.date, note: x.note || x.desc, who: x.counterparty}).filter(c => c.hit && c.fits).slice(0, 3);
   if(!x.pb.length) return "";
@@ -3913,6 +4024,7 @@ function renderImport(){
         <input type="checkbox" id="ir${x.i}" data-change="impRow" data-id="${x.i}" ${x.include ? "checked" : ""} aria-label="Include ${esc(x.desc)}">
         <label for="ir${x.i}" class="ib"><span class="it">${esc(x.desc)}</span><span class="is">${niceDate(x.date)} · <span class="pill ${k.kind === "income" ? "ok" : k.kind === "settle" ? "soon" : ""}">${k.partnerRow && k.kind === "expense" ? `${esc(nameOf(k.paidBy))}'s share` : kinds[k.kind]}</span>${x.dup ? ` <span class="pill today">${esc(x.dup)}</span>` : ""}</span></label>
         <span class="ia ${out ? "" : "in"}" title="${esc(x.note)}">${out ? "" : "+"}${money(Math.abs(x.cents))}</span>
+        ${k.partnerRow && k.kind === "settle" ? impCoverPick(x, k) : ""}
         ${k.partnerRow ? `<select class="ic" data-change="impMode" data-id="${x.i}" aria-label="What was this payment?"><option value="settle" ${x.mode==="settle"?"selected":""}>Settles up between you</option><option value="share" ${x.mode==="share"?"selected":""}>${esc(nameOf(k.paidBy))} paying their share of something</option></select>` : ""}
         ${k.kind === "income" && !k.partnerRow ? impRepayPick(x) : ""}
         ${k.kind === "expense" ? `<select class="ic" data-change="impCat" data-id="${x.i}" aria-label="Category for ${esc(x.desc)}">${catOptions(x.categoryId || "")}</select>` : ""}
@@ -3927,6 +4039,7 @@ function renderImport(){
       state.budget.txns.push({id:uid(), kind:k.kind, amount:Math.abs(x.cents), date:x.date, note:x.desc, paidBy:k.paidBy,
         categoryId: k.kind === "expense" && state.budget.categories.some(c => c.id === x.categoryId) ? x.categoryId : null,
         shared: k.kind === "expense" && imp.shared && !k.partnerRow, billId:null, imp:x.key, source:imp.fmt});
+      if(k.kind === "settle" && x.covers && x.covers.length) state.budget.txns[state.budget.txns.length - 1].covers = x.covers.slice();
       if(k.kind === "income" && !k.partnerRow && x.repays){ const e = state.budget.txns.find(t => t.id === x.repays && t.kind === "expense" && !t.cancelled), nt = state.budget.txns[state.budget.txns.length - 1];
         if(e && Math.abs(x.cents) <= e.amount - repaidSoFar(e.id, nt.id)){ nt.repays = e.id; paired++; } else unpaired++; }
       if(x.date > last) last = x.date;
@@ -3961,6 +4074,7 @@ function importChange(e){
   const c = el.dataset.change;
   if(c === "impRow"){ const x = row(); if(x){ x.include = el.checked; } }
   else if(c === "impCat"){ const x = row(); if(x) x.categoryId = el.value || null; return true; }
+  else if(c === "impCover"){ const x = row(); if(x) x.covers = el.value ? x.covGuess : null; return true; }
   else if(c === "impRepay"){ const x = row(); if(x) x.repays = el.value || null; return true; }
   else if(c === "impMode"){ const x = row(); if(x) x.mode = el.value === "share" ? "share" : "settle"; }
   else if(c === "impFlip") imp.flip = el.checked;
@@ -5468,7 +5582,7 @@ function toast(msg, undo, label, ms){
   toastTimer = setTimeout(() => { $("#toastRoot").innerHTML = ""; toast.undo = null; }, ms || (undo ? 5000 : 2200));
 }
 /* ---- which version is this, and is there a newer one? ---- */
-const BUILD = "2026-10-30 · 38";
+const BUILD = "2026-10-30 · 39";
 let updateSeen = "";
 async function checkForUpdate(){
   if(!/^https?:$/.test(location.protocol) || navigator.onLine === false) return;
