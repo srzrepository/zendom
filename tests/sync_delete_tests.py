@@ -121,6 +121,33 @@ async def scenario(b, name, a_page, b_page, b_reopen_page, b_closed):
     a_has = await ev(A, "state.budget.txns.some(t => t.id === 'dupe')"); b_has = await ev(B, "state.budget.txns.some(t => t.id === 'dupe')")
     check(f"deleted entry stays deleted: {name}", ok0 and srv_del and not a_has and not b_has and not A.errors and not B.errors, f"server del={srv_del} sam={a_has} charlie={b_has}")
     await A.ctx.close(); await ctxB.close()
+
+async def both_editing(b):
+    srv = Server()
+    A = await phone(b, srv, "sam@example.com"); await ev(A, "ACTIONS.syncIn()"); await settle(A)
+    await ev(A, "state.budget.txns.push({id:'x', kind:'expense', amount:5000, date:'2026-10-29', categoryId:null, paidBy:'sam', shared:true, note:'Groceries', billId:null}); state.chores.push({id:'cx', title:'Vacuum', owner:'sam', freq:'weekly', everyDays:null, start:'2026-10-29', lastDone:null, history:[], done:false, standard:'', cpe:{c:'',p:'',e:''}, example:false}); save()"); await settle(A)
+    B = await phone(b, srv, "charliepurdomva@gmail.com"); await ev(B, "ACTIONS.syncIn()"); await settle(A, B, ms=1600)
+    # Sam opens the entry; Charlie changes the amount; Sam changes only the note and saves
+    await ev(A, "ACTIONS.tab('budget'); ACTIONS.editTxn('x')")
+    await ev(B, "state.budget.txns.find(t => t.id === 'x').amount = 9900; save()"); await settle(A, B, ms=1500)
+    await ev(A, "document.querySelector('#tnote').value = 'Groceries + wine'; document.querySelector('#sheetForm').requestSubmit()"); await settle(A, B, ms=2400)
+    a = await ev(A, "JSON.stringify(state.budget.txns.find(t => t.id === 'x'), ['note','amount'])"); bb = await ev(B, "JSON.stringify(state.budget.txns.find(t => t.id === 'x'), ['note','amount'])")
+    check("both editing: an open form keeps the other person's change (note from Sam, amount from Charlie)", a == bb == '{"note":"Groceries + wine","amount":9900}', f"{a} {bb}")
+    # both change the same field: the one who saves last wins, and is told
+    await ev(A, "ACTIONS.editTxn('x')")
+    await ev(B, "state.budget.txns.find(t => t.id === 'x').note = 'Charlie note'; save()"); await settle(A, B, ms=1500)
+    await ev(A, "document.querySelector('#tnote').value = 'Sam note'; document.querySelector('#sheetForm').requestSubmit()"); await settle(A, B, ms=2600)
+    check("both editing: same field changed on both: the later save is kept everywhere", await ev(B, "state.budget.txns.find(t => t.id === 'x').note") == "Sam note")
+    check("both editing: and the person saving is told the other had changed it", "had changed this too" in await ev(A, "document.body.innerText"))
+    # a chore form open while the other ticks it off: the tick stays
+    await ev(A, "ACTIONS.tab('chores'); ACTIONS.editChore('cx')")
+    await ev(B, "toggleChore('cx')"); await settle(A, B, ms=1500)
+    await ev(A, "document.querySelector('#sheetForm #title').value = 'Vacuum the rug'; document.querySelector('#sheetForm').requestSubmit()"); await settle(A, B, ms=2400)
+    c = await ev(B, "JSON.stringify(state.chores.find(c => c.id === 'cx'), ['title','lastDone'])")
+    check("both editing: renaming a chore keeps the other person's tick", '"title":"Vacuum the rug"' in c and '"lastDone":"2026-10-' in c, c)
+    check("both editing: no page errors", not A.errors and not B.errors, "; ".join(A.errors + B.errors))
+    await A.ctx.close(); await B.ctx.close()
+
 async def main():
     async with async_playwright() as p:
         b = await p.chromium.launch()
@@ -129,7 +156,8 @@ async def main():
         await scenario(b, "Charlie on old build, reopens old", PAGE, OLD, OLD, True)
         await scenario(b, "Charlie on old build, reopens NEW build", PAGE, OLD, PAGE, True)
         await scenario(b, "Sam on old build deletes, Charlie new", OLD, PAGE, PAGE, True)
+        await both_editing(b)
         await b.close()
     failed = [r for r in results if not r[1]]
-    print(f"\n{len(results) - len(failed)} of {len(results)} delete-sync checks passed"); sys.exit(1 if failed else 0)
+    print(f"\n{len(results) - len(failed)} of {len(results)} two-phone checks passed"); sys.exit(1 if failed else 0)
 asyncio.run(main())

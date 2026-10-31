@@ -2444,7 +2444,7 @@ function findDuplicateRecipe(title, source, exceptId){
   return null;
 }
 function recipeForm(id, focusPaste, preset){
-  const r = id ? state.recipes.find(x => x.id === id) : null; if(id && !r) return;
+  const r = id ? state.recipes.find(x => x.id === id) : null; if(id && !r) return; editStart(r);
   const d = r || {title:"", servings:4, prep:"", cook:"", categories:[], ingredients:[], steps:[], notes:"", source:""};
   openSheet(r ? "Edit recipe" : "New recipe", `
     ${`<div class="pastebox">
@@ -2478,7 +2478,7 @@ function recipeForm(id, focusPaste, preset){
     const unchanged = r && titleKey(r.title) === titleKey(data.title) && sourceKey(r.source) === sourceKey(data.source);   // editing other fields doesn't re-warn
     const dup = unchanged ? null : findDuplicateRecipe(data.title, data.source, r && r.id);
     if(dup && warnDuplicate(form, dup.why === "with this name" ? "rtitle" : "source", dup.r.id, `You already have a recipe ${dup.why}: “${dup.r.title}”. Tap Save again to keep both.`, "openDupRecipe", dup.r.id)) return;
-    if(r){ Object.assign(r, data); r.example = false; if(cookState[r.id]) cookState[r.id].target = r.servings; }
+    if(r){ applyEdit(r, data); r.example = false; if(cookState[r.id]) cookState[r.id].target = r.servings; }
     else state.recipes.push(Object.assign({id:uid(), favorite:false, example:false, created:Date.now(), cooked:[], photos:[], pdf: preset && pendingPdf ? pendingPdf.id : "", pdfName: preset && pendingPdf ? pendingPdf.name : ""}, data));
     if(preset) pendingPdf = null;   // kept with the recipe now
     save(); closeSheet(); render(); toast(r ? "Recipe saved" : "Recipe added");
@@ -2584,7 +2584,7 @@ function fillFromPaste(auto){
 }
 
 function mealForm(id, date, recipeId){
-  const m = id ? state.meals.find(x => x.id === id) : null; if(id && !m) return;
+  const m = id ? state.meals.find(x => x.id === id) : null; if(id && !m) return; editStart(m);
   const d = m || {date: date || todayStr(), slot:"dinner", recipeId: recipeId || null, text:""};
   const opts = state.recipes.slice().sort((a,b) => a.title.localeCompare(b.title));
   openSheet(m ? "Edit meal" : "Plan a meal", `
@@ -2604,7 +2604,7 @@ function mealForm(id, date, recipeId){
     if(!rid && !text) return fail("mtext","Pick a recipe or write a short note.");
     const data = {date, slot, recipeId: rid || null, text};
     const note = form.elements.mcomment.value.trim().slice(0, 300);
-    const target = m ? Object.assign(m, data) : Object.assign({id:uid(), comments:[]}, data);
+    const target = m ? (applyEdit(m, data), m) : Object.assign({id:uid(), comments:[]}, data);
     if(!Array.isArray(target.comments)) target.comments = [];
     if(!m) state.meals.push(target);
     if(note) target.comments.push({id:uid(), by:prefs.user, text:note, at:Date.now()});
@@ -2614,7 +2614,7 @@ function mealForm(id, date, recipeId){
 }
 
 function groceryForm(id){
-  const g = state.grocery.find(x => x.id === id); if(!g) return;
+  const g = state.grocery.find(x => x.id === id); if(!g) return; editStart(g);
   openSheet("Edit item", `
     ${field("gname2","Item", `<input id="gname2" name="gname2" maxlength="80" value="${esc(g.name)}">`)}
     <div class="two">${field("gqty","Amount", `<input id="gqty" name="gqty" maxlength="60" value="${esc(g.qty)}" placeholder="Optional">`)}
@@ -2623,13 +2623,13 @@ function groceryForm(id){
   form => {
     const name = val(form,"gname2"); if(!name) return fail("gname2","The item needs a name.");
     const aisle = val(form,"gaisle");
-    Object.assign(g, {name, qty:val(form,"gqty"), aisle: AISLES.includes(aisle) ? aisle : "Other"});
+    applyEdit(g, {name, qty:val(form,"gqty"), aisle: AISLES.includes(aisle) ? aisle : "Other"});
     save(); closeSheet(); render(); toast("Item saved");
   });
 }
 
 function pantryForm(id){
-  const p = id ? state.pantry.find(x => x.id === id) : null; if(id && !p) return;
+  const p = id ? state.pantry.find(x => x.id === id) : null; if(id && !p) return; editStart(p);
   const room = ROOMS[prefs.pantryRoom] ? prefs.pantryRoom : "fridge";
   const d = p || {name:"", qty:"", room, expires:""};
   openSheet(p ? "Edit pantry item" : `Add to ${ROOMS[room]}`, `
@@ -2647,7 +2647,7 @@ function pantryForm(id){
     const data = {name, qty:val(form,"pqty"), room:rm, expires:exp};
     const same = p && normName(p.name) === normName(name) ? null : state.pantry.find(x => x !== p && normName(x.name) === normName(name));
     if(same && warnDuplicate(form, "pname", same.id, `“${same.name}” is already in ${ROOMS[same.room]}${same.qty ? ` (${same.qty})` : ""}. Tap Save again to add a second entry.`, "openDupPantry", same.id)) return;
-    if(p){ Object.assign(p, data); p.example = false; } else state.pantry.push(Object.assign({id:uid(), example:false}, data));
+    if(p){ applyEdit(p, data); p.example = false; } else state.pantry.push(Object.assign({id:uid(), example:false}, data));
     prefs.pantryRoom = rm; savePrefs();
     if(prefs.tab === "kitchen" && prefs.pantryRoom !== rm){ prefs.pantryRoom = rm; savePrefs(); }
     save(); closeSheet(); render(); toast(p ? "Saved" : `Added to ${ROOMS[rm]}`);
@@ -3303,7 +3303,7 @@ function wireSplit(prefix, sharedName, amountName){
 }
 function txnForm(id, preset){
   const t = id ? state.budget.txns.find(x => x.id === id) : null; if(id && !t) return;
-  if(t && t.kind === "settle") return settleForm(t.id);
+  if(t && t.kind === "settle") return settleForm(t.id); editStart(t);
   const d = t || Object.assign({kind:"expense", amount:0, date: curMonth() === todayStr().slice(0,7) ? todayStr() : curMonth() + "-01", categoryId:"", paidBy:prefs.user, shared:true, note:""}, preset || {});
   openSheet(t ? "Edit entry" : "Add spending", `
     <div class="seg" role="radiogroup" aria-label="Type">${[["expense","Spending"],["income","Income"]].map(([k,l]) => `<label class="chip" style="cursor:pointer"><input type="radio" name="kind" value="${k}" ${d.kind===k?"checked":""} style="accent-color:var(--accent)"> ${l}</label>`).join("")}</div>
@@ -3344,12 +3344,13 @@ function txnForm(id, preset){
     }
     const data = {kind, amount, date, note:val(form,"tnote"), paidBy, categoryId: kind === "expense" && state.budget.categories.some(c => c.id === cid) ? cid : null, shared, split: sp.split,
       details: form.elements.tdetails.value.trim().slice(0, 500), cancelled: form.elements.tcancel.checked};
-    if(repays){ data.repays = repays; }
+    data.repays = repays || null;
     if(!t){ const dup = dupOf(data); if(dup && warnOnce(form, "dup" + dup.id, "amt", dupMsg(dup), dup.id)) return; }
     if(!t && kind === "expense"){ const bm = billMatch(data);
       if(bm && warnOnce(form, "bill" + bm.id, "amt", `This looks like your ${bm.name} bill (${money(bm.amount)}, due ${niceDate(bm.nextDue)}). Logging it here won't move the bill to its next date, so its Paid button would add it again. Use the bill's Paid button, or tap Save again to log it here anyway.`)){
         $("#f-amt").insertAdjacentHTML("beforeend", `<button type="button" class="link" data-act="billFromForm" data-id="${bm.id}" style="align-self:flex-start;padding-left:0">Use the bill's Paid button</button>`); return; } }
-    if(t){ Object.assign(t, data); if(!repays) delete t.repays; else delete t.noRepay; } else state.budget.txns.push(Object.assign({id:uid(), billId:null}, data));
+    if(t){ applyEdit(t, data); if(!t.repays) delete t.repays; else delete t.noRepay; }
+    else { const nt = Object.assign({id:uid(), billId:null}, data); if(!nt.repays) delete nt.repays; state.budget.txns.push(nt); }
     const pe = repays && state.budget.txns.find(x => x.id === repays);
     budgetMonth = (pe ? pe.date : date).slice(0, 7);   // a payback shows under its expense
     save(); closeSheet(); render(); toast(data.cancelled ? "Saved as cancelled · not counted" : pe ? `Paired with “${expLabel(pe)}”` : t ? "Saved" : kind === "income" ? "Income logged" : `${money(amount)} logged`);
@@ -3360,7 +3361,7 @@ function txnForm(id, preset){
 }
 function settleForm(id, preset, replaces){
   const t = id ? state.budget.txns.find(x => x.id === id) : null;
-  const bal = balance();
+  const bal = balance(); editStart(t);
   const d = t || Object.assign({amount:Math.abs(bal), date:todayStr(), paidBy: bal > 0 ? "charlie" : "sam", note:settleMemo()}, preset || {});
   const payee = other(d.paidBy), vu = (state.budget.venmo || {})[payee];
   openSheet(t ? "Edit payment" : "Record a payment", `
@@ -3384,7 +3385,7 @@ function settleForm(id, preset, replaces){
       if(amount > owes + 100 && Math.sign(nb) === (paidBy === "sam" ? 1 : -1) && warnOnce(form, "over" + paidBy + amount, "samt",
         `${owes ? `${nameOf(paidBy)} only owes ${money(owes)} right now` : `${nameOf(paidBy)} doesn't owe anything right now`}, so this would leave ${nameOf(other(paidBy))} owing ${money(Math.abs(nb))}. If that's right, tap Save again.`)) return;
     }
-    if(t) Object.assign(t, data); else state.budget.txns.push(Object.assign({id:uid(), billId:null}, data, settleForm.via ? {source:settleForm.via} : {}));
+    if(t) applyEdit(t, data); else state.budget.txns.push(Object.assign({id:uid(), billId:null}, data, settleForm.via ? {source:settleForm.via} : {}));
     if(!t && replaces) removeBy(state.budget.txns, replaces);   // a payback that was really a payment between you
     settleForm.via = null;
     save(); closeSheet(); render(); toast("Payment recorded");
@@ -3403,7 +3404,7 @@ function settleVenmo(){
   window.open(link, "_blank", "noopener");
 }
 function catForm(id){
-  const c = id ? state.budget.categories.find(x => x.id === id) : null; if(id && !c) return;
+  const c = id ? state.budget.categories.find(x => x.id === id) : null; if(id && !c) return; editStart(c);
   openSheet(c ? "Edit category" : "New category", `
     ${field("cname2","Name", `<input id="cname2" name="cname2" maxlength="30" value="${esc(c ? c.name : "")}" autocomplete="off">`)}
     ${field("climit","Default monthly target", `<input id="climit" name="climit" inputmode="decimal" placeholder="Optional, e.g. 400" value="${esc(c ? centsToInput(c.limit) : "")}">`, "Used for months you haven't planned yet. Leave blank for none.")}
@@ -3413,12 +3414,12 @@ function catForm(id){
     if(!name) return fail("cname2","Name the category.");
     if(state.budget.categories.some(x => x !== c && x.name.toLowerCase() === name.toLowerCase())) return fail("cname2","You already have a category with that name.");
     let limit = 0; if(lim){ limit = parseMoney(lim); if(limit === null) return fail("climit","Enter an amount like 400, or leave it blank."); }
-    if(c) Object.assign(c, {name, limit}); else state.budget.categories.push({id:uid(), name, limit});
+    if(c) applyEdit(c, {name, limit}); else state.budget.categories.push({id:uid(), name, limit});
     save(); closeSheet(); render(); toast("Category saved");
   });
 }
 function billForm(id){
-  const b = id ? state.budget.bills.find(x => x.id === id) : null; if(id && !b) return;
+  const b = id ? state.budget.bills.find(x => x.id === id) : null; if(id && !b) return; editStart(b);
   const d = b || {name:"", amount:0, cycle:"monthly", nextDue:todayStr(), categoryId: (state.budget.categories.find(c => /bill|subscri/i.test(c.name)) || {}).id || "", paidBy:prefs.user, shared:true, autopay:false};
   openSheet(b ? "Edit bill" : "New bill or subscription", `
     ${field("bname","Name", `<input id="bname" name="bname" maxlength="40" value="${esc(d.name)}" placeholder="Rent, PG&E, Spotify…" autocomplete="off">`)}
@@ -3442,7 +3443,7 @@ function billForm(id){
     if(bsp.error) return fail("bsplit", bsp.error);
     const data = {name, amount, cycle, nextDue:due, categoryId: state.budget.categories.some(c => c.id === cid) ? cid : null, paidBy: HUMANS.includes(paidBy) ? paidBy : prefs.user, shared:form.elements.bshared.checked, split: bsp.split, autopay:form.elements.bauto.checked};
     if(!b || b.nextDue !== due) data.anchorDay = +due.slice(8);   // a newly typed date sets the day it repeats on
-    if(b) Object.assign(b, data); else state.budget.bills.push(Object.assign({id:uid()}, data));
+    if(b) applyEdit(b, data); else state.budget.bills.push(Object.assign({id:uid()}, data));
     save(); closeSheet(); render(); toast("Bill saved");
   });
   wireSplit("b", "bshared", "bamt");
@@ -3452,7 +3453,7 @@ function billForm(id){
 const payMonthly = p => p.cycle === "weekly" ? Math.round(p.amount * 52 / 12) : p.cycle === "biweekly" ? Math.round(p.amount * 26 / 12) : p.cycle === "semimonthly" ? p.amount * 2 : p.amount;
 function dayOptions(sel){ return [...Array(30)].map((_, i) => `<option value="${i + 1}" ${sel === i + 1 ? "selected" : ""}>${dayLabel(i + 1)}</option>`).join("") + `<option value="31" ${sel >= 31 ? "selected" : ""}>Last day</option>`; }
 function paydayForm(id){
-  const p = id ? state.budget.paydays.find(x => x.id === id) : null; if(id && !p) return;
+  const p = id ? state.budget.paydays.find(x => x.id === id) : null; if(id && !p) return; editStart(p);
   const d = p || {name:"Paycheck", amount:0, who:prefs.user, cycle:"biweekly", next:todayStr(), days:[15, 31], weekend:true};
   const dd = d.cycle === "semimonthly" ? d.days : d.cycle === "monthly" ? [d.days[0], 31] : [15, 31];
   openSheet(p ? "Edit paycheck" : "New paycheck", `
@@ -3485,7 +3486,7 @@ function paydayForm(id){
       next = same ? p.next : payByDays(days, todayStr(), false);   // keep your place unless the days changed
     }
     const data = {name, amount, who, cycle, next, days, weekend: form.elements.pweekend.checked};
-    if(p) Object.assign(p, data); else state.budget.paydays.push(Object.assign({id:uid()}, data));
+    if(p) applyEdit(p, data); else state.budget.paydays.push(Object.assign({id:uid()}, data));
     save(); closeSheet(); render(); toast(`Saved · next payday ${niceDate(payActual(data, next))}`);
   });
   const sync = () => { const c = val($("#sheetForm"), "pcycle"); $("#pDateBox").hidden = !(c === "weekly" || c === "biweekly"); $("#pDaysBox").hidden = !(c === "semimonthly" || c === "monthly"); $("#pDay2Wrap").hidden = c !== "semimonthly"; };
@@ -4200,7 +4201,7 @@ function calLinksHTML(e){
     <span class="hint">A one-time copy of the saved details: later changes here won't update it.${rep ? " Outlook's links can't repeat; use the calendar file for that." : ""}</span></div>`;
 }
 function eventForm(id, date){
-  const e = id ? state.events.find(x => x.id === id) : null; if(id && !e) return;
+  const e = id ? state.events.find(x => x.id === id) : null; if(id && !e) return; editStart(e);
   const d = e || {title:"", date: date || todayStr(), time:"", who:"", repeat:"none", note:""};
   openSheet(e ? "Edit event" : "New event", `
     ${field("etitle","What's happening?", `<input id="etitle" name="etitle" maxlength="80" value="${esc(d.title)}" placeholder="Dentist, dinner with Mom, trip to Tahoe…" autocomplete="off">`)}
@@ -4219,7 +4220,7 @@ function eventForm(id, date){
     const who = (form.querySelector("input[name=ewho]:checked") || {}).value || "";
     const data = {title, date, time, who: HUMANS.includes(who) ? who : "", repeat: EV_REPEAT[rep] ? rep : "none", note: form.elements.enote.value.trim().slice(0, 500)};
     let added = null;
-    if(e) Object.assign(e, data); else { added = Object.assign({id:uid()}, data); state.events.push(added); }
+    if(e) applyEdit(e, data); else { added = Object.assign({id:uid()}, data); state.events.push(added); }
     calDay = date; calMonth = date.slice(0, 7);
     if(!(date >= curCalWeek() && date <= addDays(curCalWeek(), 6))) calWeek = date < todayStr() ? date : (diffDays(todayStr(), date) < 7 ? todayStr() : date);
     save(); closeSheet(); render(); toast(e ? "Event saved" : `Added to ${parse(date).toLocaleDateString(undefined,{weekday:"long", month:"short", day:"numeric"})}`);
@@ -4432,7 +4433,7 @@ function viewFund(){
 }
 function placeList(){ return [...new Set(["Savings account","Cash jar","Venmo", ...fund().entries.flatMap(e => [e.place, e.toPlace]).filter(Boolean)])]; }
 function fundForm(kind, id){
-  const f = fund(), e = id ? f.entries.find(x => x.id === id) : null; if(id && !e) return;
+  const f = fund(), e = id ? f.entries.find(x => x.id === id) : null; if(id && !e) return; editStart(e);
   kind = e ? e.kind : kind;
   const d = e || {amount:0, date:todayStr(), who:prefs.user, place: Object.keys(fundPlaces())[0] || "Savings account", toPlace:"", goalId:"", note:""};
   const places = fundPlaces();
@@ -4462,12 +4463,12 @@ function fundForm(kind, id){
     }
     const gid = kind !== "move" && form.elements.fgoal ? val(form,"fgoal") : "";
     const data = {kind, amount, date, who: HUMANS.includes(who) ? who : prefs.user, place: place.slice(0, 30), toPlace: toPlace.slice(0, 30), goalId: f.goals.some(g => g.id === gid) ? gid : "", note: kind !== "move" ? val(form,"fnote") : ""};
-    if(e) Object.assign(e, data); else f.entries.push(Object.assign({id:uid(), created:Date.now()}, data));
+    if(e) applyEdit(e, data); else f.entries.push(Object.assign({id:uid(), created:Date.now()}, data));
     save(); closeSheet(); render(); toast(e ? "Saved" : kind === "in" ? `${money(amount)} added to the fund` : kind === "out" ? `${money(amount)} spent from the fund` : "Moved");
   });
 }
 function goalForm(id){
-  const g = id ? fund().goals.find(x => x.id === id) : null; if(id && !g) return;
+  const g = id ? fund().goals.find(x => x.id === id) : null; if(id && !g) return; editStart(g);
   openSheet(g ? "Edit goal" : "New shared goal", `
     ${field("gname3","What are you saving for?", `<input id="gname3" name="gname3" maxlength="40" value="${esc(g ? g.name : "")}" placeholder="Japan trip, spa weekend, new couch…" autocomplete="off">`)}
     <div class="two">${field("gtarget","Target", `<input id="gtarget" name="gtarget" inputmode="decimal" value="${esc(g ? centsToInput(g.target) : "")}" placeholder="$0">`)}
@@ -4479,7 +4480,7 @@ function goalForm(id){
     if(!name) return fail("gname3","Name the goal.");
     if(target === null) return fail("gtarget","Enter a target like 2000.");
     if(by && !isDate(by)) return fail("gby","Pick a valid date or leave it blank.");
-    if(g) Object.assign(g, {name, target, by}); else fund().goals.push({id:uid(), name, target, by});
+    if(g) applyEdit(g, {name, target, by}); else fund().goals.push({id:uid(), name, target, by});
     save(); closeSheet(); render(); toast("Goal saved");
   });
 }
@@ -5141,7 +5142,7 @@ function askDelete(delAct, label){
 /* ---------- forms ---------- */
 function choreForm(id){
   const c = id ? state.chores.find(x => x.id === id) : null;
-  if(id && !c) return;
+  if(id && !c) return; editStart(c);
   const d = c || {title:"", owner:prefs.user, freq:"weekly", everyDays:7, start:todayStr(), standard:"", cpe:{c:"",p:"",e:""}};
   const dateLabel = c && c.freq !== "once" && c.lastDone ? "First due date" : (d.freq === "once" ? "Due date" : "Starts / next due");
   openSheet(c ? "Edit chore card" : "New chore card", `
@@ -5170,7 +5171,7 @@ function choreForm(id){
     if(!isDate(start)) return fail("start","Pick a valid date.");
     const owner = (form.querySelector("input[name=owner]:checked") || {}).value || "";
     const data = {title, owner: HUMANS.includes(owner) ? owner : "", freq, everyDays: freq==="custom" ? +n : null, start, standard: val(form,"standard"), cpe:{c:val(form,"cpeC"), p:val(form,"cpeP"), e:val(form,"cpeE")}};
-    if(c){ Object.assign(c, data); c.example = false; if(freq === "once" && c.lastDone === todayStr()) c.done = true; }
+    if(c){ applyEdit(c, data); c.example = false; if(freq === "once" && c.lastDone === todayStr()) c.done = true; }
     else state.chores.push(Object.assign({id:uid(), lastDone:null, history:[], done:false, example:false}, data));
     const fkey = !data.owner ? "none" : data.owner === prefs.user ? "me" : "them";
     const moved = prefs.tab === "chores" && prefs.choreFilter !== "all" && prefs.choreFilter !== fkey;
@@ -5183,7 +5184,7 @@ function choreForm(id){
 }
 
 function noteForm(id, opts){
-  const n = id ? state.notes.find(x => x.id === id) : null; if(id && !n) return;
+  const n = id ? state.notes.find(x => x.id === id) : null; if(id && !n) return; editStart(n);
   const d = n || {text:"", color:"butter", pinned:false};
   drawPad.strokes = n && n.drawing ? JSON.parse(JSON.stringify(n.drawing.strokes)) : []; drawPad.undo = []; drawPad.mode = "pen";
   const startDrawing = !!(n && n.drawing) || opts === "draw";
@@ -5201,7 +5202,7 @@ function noteForm(id, opts){
     if(!text && !drawing) return fail("text", $("#drawWrap") && !$("#drawWrap").hidden ? "Draw something or write a few words." : "A note needs some words or a drawing.");
     const color = (form.querySelector("input[name=color]:checked") || {}).value || "butter";
     const pinned = form.elements.pinned.checked;
-    if(n) Object.assign(n, {text, drawing, color, pinned, updated:Date.now()});
+    if(n) applyEdit(n, {text, drawing, color, pinned, updated:Date.now()});
     else state.notes.push({id:uid(), text, drawing, color, pinned, author:prefs.user, created:Date.now(), updated:Date.now(), reactions:[], replies:[]});
     save(); closeSheet(); render(); toast(n ? "Note saved" : "Note added");
   });
@@ -5350,7 +5351,7 @@ function allergyForm(){
 }
 
 function medForm(id){
-  const p = state.people[prefs.fam]; const m = id ? p.meds.find(x => x.id === id) : null; if(id && !m) return;
+  const p = state.people[prefs.fam]; const m = id ? p.meds.find(x => x.id === id) : null; if(id && !m) return; editStart(m);
   const d = m || {name:"", dose:"", schedule:"", notes:""};
   openSheet(m ? "Edit medication" : `Add a medication for ${p.name}`, `
     ${field("mname","Name", `<input id="mname" name="mname" maxlength="80" value="${esc(d.name)}" autocomplete="off">`)}
@@ -5361,13 +5362,13 @@ function medForm(id){
   form => {
     const name = val(form,"mname"); if(!name) return fail("mname","Add the medication name.");
     const data = {name, dose:val(form,"dose"), schedule:val(form,"schedule"), notes:val(form,"mnotes")};
-    if(m) Object.assign(m, data); else p.meds.push(Object.assign({id:uid()}, data));
+    if(m) applyEdit(m, data); else p.meds.push(Object.assign({id:uid()}, data));
     save(); closeSheet(); render(); toast(m ? "Medication saved" : "Medication added");
   });
 }
 
 function checkupForm(id, presetName){
-  const p = state.people[prefs.fam]; const c = id ? p.checkups.find(x => x.id === id) : null; if(id && !c) return;
+  const p = state.people[prefs.fam]; const c = id ? p.checkups.find(x => x.id === id) : null; if(id && !c) return; editStart(c);
   const d = c || {name: presetName || "", months:12, last:"", provider:"", next:null};
   const nx = d.next || {date:"", time:"", where:""};
   openSheet(c ? "Edit checkup" : `Add a checkup for ${p.name}`, `
@@ -5398,14 +5399,14 @@ function checkupForm(id, presetName){
     if(nt && !/^([01]\d|2[0-3]):[0-5]\d$/.test(nt)) return fail("ntime","Pick a valid time or leave it blank.");
     const was = c && c.next ? c.next.date + c.next.time : "";
     const data = {name, months:+months, last, provider:val(form,"provider"), next: nd ? {date:nd, time:nt, where:val(form,"nwhere")} : null};
-    if(c) Object.assign(c, data); else p.checkups.push(Object.assign({id:uid()}, data));
+    if(c) applyEdit(c, data); else p.checkups.push(Object.assign({id:uid()}, data));
     save(); closeSheet(); render();
     toast(data.next ? (c && c.next && was !== data.next.date + data.next.time ? `Rescheduled to ${niceDate(data.next.date)}` : c && c.next ? "Checkup saved" : `Booked for ${niceDate(data.next.date)}`) : "Checkup saved");
   });
 }
 
 function vaccineForm(id){
-  const p = state.people[prefs.fam]; const v = id ? p.vaccines.find(x => x.id === id) : null; if(id && !v) return;
+  const p = state.people[prefs.fam]; const v = id ? p.vaccines.find(x => x.id === id) : null; if(id && !v) return; editStart(v);
   const d = v || {name:"", date:"", nextDue:""};
   openSheet(v ? "Edit vaccine" : `Add a vaccine for ${p.name}`, `
     ${field("vname","Vaccine", `<input id="vname" name="vname" maxlength="80" value="${esc(d.name)}" placeholder="${p.kind==="cat" ? "e.g. Rabies, FVRCP" : "e.g. Flu, Tdap"}" autocomplete="off">`)}
@@ -5420,7 +5421,7 @@ function vaccineForm(id){
     if(next && !isDate(next)) return fail("vnext","Pick a valid date or leave it blank.");
     if(date && next && next <= date) return fail("vnext","Next due should be after the date given.");
     const data = {name, date, nextDue:next};
-    if(v) Object.assign(v, data); else p.vaccines.push(Object.assign({id:uid()}, data));
+    if(v) applyEdit(v, data); else p.vaccines.push(Object.assign({id:uid()}, data));
     save(); closeSheet(); render(); toast("Vaccine saved");
   });
 }
@@ -5467,7 +5468,7 @@ function toast(msg, undo, label, ms){
   toastTimer = setTimeout(() => { $("#toastRoot").innerHTML = ""; toast.undo = null; }, ms || (undo ? 5000 : 2200));
 }
 /* ---- which version is this, and is there a newer one? ---- */
-const BUILD = "2026-10-30 · 37";
+const BUILD = "2026-10-30 · 38";
 let updateSeen = "";
 async function checkForUpdate(){
   if(!/^https?:$/.test(location.protocol) || navigator.onLine === false) return;
@@ -5554,6 +5555,22 @@ const ACTIONS = {
   showBackups: () => backupsSheet(),
   copyBackup: id => { const k = listBackups()[+id]; const raw = k ? lsGet(k) : null; if(raw != null) copyText(raw); }
 };
+/* ---- edit forms: save only what you changed ---- */
+const sameVal = (a, b) => JSON.stringify(a === undefined ? null : a) === JSON.stringify(b === undefined ? null : b);
+// Call when an edit form opens on an existing item: remembers it as it was.
+function editStart(o){ editStart.obj = o || null; editStart.base = o ? JSON.parse(JSON.stringify(o)) : null; }
+// Write a form's values into the item, but only the fields the form changed. Returns the fields that the
+// other phone had also changed meanwhile (yours win; a note says so).
+function applyEdit(o, data){
+  const base = editStart.obj === o ? editStart.base : null, both = [];
+  Object.keys(data).forEach(k => {
+    if(base && sameVal(data[k], base[k])) return;                       // you didn't change it: keep what's there now
+    if(base && !sameVal(o[k], base[k]) && !sameVal(o[k], data[k])) both.push(k);
+    o[k] = data[k];
+  });
+  if(both.length) setTimeout(() => toast(`${nameOf(other(prefs.user))} had changed this too while you were editing. Your changes were kept.`), 1900);
+  return both;
+}
 function removeBy(arr, id){ const i = arr.findIndex(x => x.id === id); if(i >= 0) arr.splice(i,1); return i >= 0; }
 const DELETES = {
   delChore: id => removeBy(state.chores, id) && "Chore card deleted",
