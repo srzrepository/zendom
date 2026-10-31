@@ -17,6 +17,9 @@ class Server:
     def write(self, lst, email):
         if self.down: raise Exception("unavailable: network down")
         if email not in ALLOWED: raise Exception("permission-denied: Missing or insufficient permissions.")
+        for w in lst:   # like firestore.rules: only these fields may be written
+            extra = set(w["data"]) - {"del", "j", "t", "by", "ts"}
+            if extra: raise Exception("permission-denied: Missing or insufficient permissions. (extra fields: " + ",".join(sorted(extra)) + ")")
         for w in lst:
             self.ver[w["id"]] = self.ver.get(w["id"], 0) + 1
             self.recs[w["id"]] = {"del": w["data"]["del"], "j": w["data"]["j"], "by": email}

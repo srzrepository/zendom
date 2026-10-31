@@ -1888,10 +1888,10 @@ async def test_fund_pool(browser):
 async def test_whats_new(browser):
     pg = await new_page(browser, storage={"zendom:prefs": json.dumps({"seenBuild": "2026-10-30 · 40", "tab": "today"})}, clock="2026-10-30T19:30:00-07:00")
     await pg.wait_for_timeout(1400)
-    check("what's new: after an update, a toast offers it", "Updated to version 41" in await ev(pg, "document.querySelector('#toastRoot').innerText"))
+    check("what's new: after an update, a toast offers it", "Updated to version 42" in await ev(pg, "document.querySelector('#toastRoot').innerText"))
     await act(pg, "undo")
     sh = await ev(pg, "document.querySelector('.sheet').innerText")
-    check("what's new: lists versions, newest first, marks the one you have", sh.index("Version 41") < sh.index("Version 40") and "You have this" in sh and "Before version numbers" in sh)
+    check("what's new: lists versions, newest first, marks the one you have", sh.index("Version 42") < sh.index("Version 41") and "You have this" in sh and "Before version numbers" in sh)
     await ev(pg, "closeSheet()")
     await pg.reload(); await pg.wait_for_timeout(1400)
     check("what's new: the toast only shows once per version", "Updated to version" not in await ev(pg, "document.querySelector('#toastRoot').innerText"))

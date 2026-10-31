@@ -5683,9 +5683,10 @@ function toast(msg, undo, label, ms){
   toastTimer = setTimeout(() => { $("#toastRoot").innerHTML = ""; toast.undo = null; }, ms || (undo ? 5000 : 2200));
 }
 /* ---- which version is this, and is there a newer one? ---- */
-const BUILD = "2026-10-30 · 41";
+const BUILD = "2026-10-30 · 42";
 // What's new, newest first: [version, date, changes]. Add a line here with every version.
 const CHANGELOG = [
+  ["42", "2026-10-30", ["Fixed: syncing could stop with “The database turned this account away” after you both edited the same thing. Your edits were kept on the phone and go out once both phones update."]],
   ["41", "2026-10-30", ["The Fun Fund is one pool: no more “where is it kept”. Money in shows where it came from, and “Where it came from” sums it up.",
     "Tap a goal to add money to it from the pool, move money back out, or spend from it. Deleting a goal puts its money back in the pool.",
     "This “What's new” list (More → Settings), and a heads-up after each update."]],
@@ -5958,7 +5959,11 @@ function mergeWrite(w, server){
   const baseJ = sync.shadow ? sync.shadow[w.id] : undefined;
   if(server.j === w.data.j || (baseJ !== undefined && server.j === baseJ)) return w.data;     // nobody else changed it
   let b, l, r; try { l = JSON.parse(w.data.j); r = JSON.parse(server.j); b = baseJ !== undefined ? JSON.parse(baseJ) : undefined; } catch(e){ return w.data; }
-  return Object.assign({}, w.data, {j: JSON.stringify(merge3(b, l, r)), merged: true});
+  const out = Object.assign({}, w.data, {j: JSON.stringify(merge3(b, l, r))});
+  // "merged" is for this phone only: the database accepts just del, j, t, by and ts, and refuses the whole
+  // save if anything else is sent. A non-enumerable property isn't copied into what's written.
+  Object.defineProperty(out, "merged", {value: true, enumerable: false});
+  return out;
 }
 function syncSchedule(){ if(sync.status !== "on") return; clearTimeout(sync.timer); sync.timer = setTimeout(syncFlush, 400); }
 function syncSetStatus(st, err){ sync.status = st; sync.err = err || ""; if(prefs.tab === "more" && prefs.moreTab === "settings" && !$("#sheetRoot").innerHTML) render(); }
