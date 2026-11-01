@@ -45,6 +45,7 @@ async def ev(pg, js):
     return await pg.evaluate(js)
 
 async def fill(pg, fields):
+    await pg.wait_for_timeout(45)   # a new form puts the cursor in its first box after 30ms; typing sooner can land there
     for k, v in fields.items():
         el = pg.locator(f'#sheetForm [name="{k}"]').first
         tag = await el.evaluate("e => e.tagName + ':' + (e.type || '')")
@@ -1287,9 +1288,11 @@ async def test_splits(browser):
     check("splits: summaries use it", w["sharedTotal"] == 10000 + 360000 + 20000 and round(w["sharedSam"]) == 5000 + 150000 + 8000)
     # bad input
     await ev(pg, "ACTIONS.newTxn()"); await fill(pg, {"amt": "50", "tnote": "Bad"}); await pg.locator('#sheetForm input[name=tsmode][value=amt]').check(); await fill(pg, {"tsv": "80"}); await submit(pg)
-    check("splits: a part bigger than the total is refused", await sheet_open(pg) and "up to the total" in await ev(pg, "document.querySelector('#sheetForm').innerText"))
+    _f = await ev(pg, "document.querySelector('#sheetForm') ? [...document.querySelectorAll('#sheetForm .err')].map(e => e.textContent).join(' | ') + ' || mode=' + (document.querySelector('input[name=tsmode]:checked')||{}).value + ' tsv=' + document.querySelector('#tsv').value + ' amt=' + document.querySelector('#amt').value : 'no sheet'")
+    check("splits: a part bigger than the total is refused", await sheet_open(pg) and "up to the total" in await ev(pg, "document.querySelector('#sheetForm').innerText"), _f)
     await pg.locator('#sheetForm input[name=tsmode][value=pct]').check(); await fill(pg, {"tsv": "140"}); await submit(pg)
-    check("splits: a percent over 100 is refused", await sheet_open(pg) and "from 0 to 100" in await ev(pg, "document.querySelector('#sheetForm').innerText"))
+    _f = await ev(pg, "document.querySelector('#sheetForm') ? [...document.querySelectorAll('#sheetForm .err')].map(e => e.textContent).join(' | ') + ' || mode=' + (document.querySelector('input[name=tsmode]:checked')||{}).value + ' tsv=' + document.querySelector('#tsv').value : 'no sheet'")
+    check("splits: a percent over 100 is refused", await sheet_open(pg) and "from 0 to 100" in await ev(pg, "document.querySelector('#sheetForm').innerText"), _f)
     await ev(pg, "closeSheet()")
     # the breakdown
     await act(pg, "oweDetail")
@@ -1888,10 +1891,10 @@ async def test_fund_pool(browser):
 async def test_whats_new(browser):
     pg = await new_page(browser, storage={"zendom:prefs": json.dumps({"seenBuild": "2026-10-30 · 40", "tab": "today"})}, clock="2026-10-30T19:30:00-07:00")
     await pg.wait_for_timeout(1400)
-    check("what's new: after an update, a toast offers it", "Updated to version 44" in await ev(pg, "document.querySelector('#toastRoot').innerText"))
+    check("what's new: after an update, a toast offers it", "Updated to version 45" in await ev(pg, "document.querySelector('#toastRoot').innerText"))
     await act(pg, "undo")
     sh = await ev(pg, "document.querySelector('.sheet').innerText")
-    check("what's new: lists versions, newest first, marks the one you have", sh.index("Version 44") < sh.index("Version 43") and "You have this" in sh and "Before version numbers" in sh)
+    check("what's new: lists versions, newest first, marks the one you have", sh.index("Version 45") < sh.index("Version 44") and "You have this" in sh and "Before version numbers" in sh)
     await ev(pg, "closeSheet()")
     await pg.reload(); await pg.wait_for_timeout(1400)
     check("what's new: the toast only shows once per version", "Updated to version" not in await ev(pg, "document.querySelector('#toastRoot').innerText"))
@@ -1946,6 +1949,61 @@ async def test_second_crunch(browser):
     await pg.context.close()
 
 
+async def test_category_detail(browser):
+    pg = await new_page(browser, clock="2026-10-31T20:00:00-07:00")
+    await ev(pg, """(() => { prefs.user = 'sam'; savePrefs(); prefs.spendWho = ''; state.budget.categories = [{id:'d', name:'Dining out', limit:20000}, {id:'r', name:'Rent & utilities', limit:0}, {id:'f', name:'Fun', limit:0}];
+      state.budget.txns = [
+        {id:'m', kind:'expense', amount:4720, date:'2026-10-31', categoryId:'d', paidBy:'charlie', shared:true, note:'Mcdonalds', billId:null},
+        {id:'t', kind:'expense', amount:12000, date:'2026-10-12', categoryId:'d', paidBy:'sam', shared:true, note:'Dinner w Karina', billId:null},
+        {id:'k', kind:'income', amount:4000, date:'2026-10-20', categoryId:null, paidBy:'sam', shared:false, note:'Karina', billId:null, repays:'t'},
+        {id:'c', kind:'expense', amount:900, date:'2026-10-05', categoryId:'d', paidBy:'sam', shared:false, note:'Coffee', billId:null},
+        {id:'x', kind:'expense', amount:5000, date:'2026-10-06', categoryId:'d', paidBy:'sam', shared:false, note:'Cancelled thing', billId:null, cancelled:true},
+        {id:'s', kind:'expense', amount:8000, date:'2026-09-28', categoryId:'d', paidBy:'sam', shared:false, note:'September', billId:null},
+        {id:'u', kind:'expense', amount:1500, date:'2026-10-10', categoryId:null, paidBy:'charlie', shared:false, note:'Mystery', billId:null},
+        {id:'rent', kind:'expense', amount:360000, date:'2026-10-01', categoryId:'r', paidBy:'charlie', shared:true, split:{mode:'amt', sam:150000}, note:'Rent', billId:'b'}];
+      budgetMonth = '2026-10'; save(); ACTIONS.tab('budget'); ACTIONS.btab('spending'); })()""")
+    row = await ev(pg, "document.querySelector('.catrow[data-id=d] .cv').innerText")
+    await act(pg, "catDetail", "d")
+    sh = await ev(pg, "document.querySelector('.sheet').innerText")
+    ids = await ev(pg, "[...document.querySelectorAll('.sheet .txrow')].map(r => r.dataset.id).join()")
+    check("category detail: tapping Dining out lists its October entries, newest first", ids == "m,t,c", ids)
+    check("category detail: leaves out cancelled, other months and other categories", "Cancelled thing" not in sh and "September" not in sh and "Mystery" not in sh)
+    check("category detail: the total matches the category row", "$136.20" in row and "$136.20" in sh and "of $200.00 target" in sh and "3 entries" in sh, sh[:300])
+    check("category detail: a paid-back entry shows its net amount and why", "$120.00 − $40.00 paid back" in sh and "$80.00" in sh)
+    check("category detail: says who paid and if it's shared", "Charlie paid" in sh and "Sam's" in sh)
+    await pg.locator('.sheet [data-act=editTxn][data-id=c]').click(); await pg.wait_for_timeout(60)
+    check("category detail: tapping an entry opens it to edit", await ev(pg, "document.querySelector('#sheetTitle').textContent") == "Edit entry" and await ev(pg, "document.querySelector('#tnote').value") == "Coffee")
+    await ev(pg, "closeSheet()")
+    # person view: Sam's part
+    await act(pg, "spendWho", "sam")
+    srow = await ev(pg, "document.querySelector('.catrow[data-id=r] .cv').innerText")
+    await act(pg, "catDetail", "r")
+    sh = await ev(pg, "document.querySelector('.sheet').innerText")
+    check("category detail: in Sam's view, shows her part ($1,500 of rent) and matches the row", "$1,500.00" in srow and "$1,500.00 · Sam's part" in sh and "Charlie paid $3,600.00" in sh and "from a bill" in sh, sh[:300])
+    await ev(pg, "closeSheet()"); await act(pg, "spendWho", "")
+    # uncategorized is tappable too
+    await act(pg, "catDetail", "none")
+    check("category detail: Uncategorized opens its entries", await ev(pg, "[...document.querySelectorAll('.sheet .txrow')].map(r => r.dataset.id).join()") == "u")
+    check("category detail: Uncategorized has no Edit category", not await ev(pg, "!!document.querySelector('.sheet [data-act=editCat]')"))
+    await ev(pg, "closeSheet()")
+    await act(pg, "catDetail", "f")
+    check("category detail: an empty category says so and offers Edit category", "Nothing in Fun for October 2026" in await ev(pg, "document.querySelector('.sheet').innerText") and await ev(pg, "!!document.querySelector('.sheet [data-act=editCat]')"))
+    await pg.locator('.sheet [data-act=editCat][data-id=f]').click(); await pg.wait_for_timeout(60)
+    check("category detail: Edit category opens the category form", await ev(pg, "document.querySelector('#sheetTitle').textContent") == "Edit category")
+    await ev(pg, "closeSheet()")
+    # bottom bar re-anchoring (the math; real iPhone behavior can't be run here)
+    await ev(pg, "document.body.classList.remove('typing')")
+    check("bars: no shift when what's on screen fills the layout", await ev(pg, "vvShift({height: 844, offsetTop: 0, scale: 1}, 844)") == 0)
+    check("bars: stuck layout (shorter than the screen) moves the bar down to the real bottom", await ev(pg, "vvShift({height: 844, offsetTop: 0, scale: 1}, 500)") == 344)
+    check("bars: page scrolled under the bar moves it up", await ev(pg, "vvShift({height: 500, offsetTop: 0, scale: 1}, 844)") == -344)
+    check("bars: pinch-zoom and typing are left alone", await ev(pg, "vvShift({height: 400, offsetTop: 100, scale: 2}, 844)") == 0 and await ev(pg, "(document.body.classList.add('typing'), vvShift({height: 500, offsetTop: 0, scale: 1}, 844))") == 0)
+    await ev(pg, "document.body.classList.remove('typing')")
+    check("bars: the bar uses the shift", await ev(pg, "(document.documentElement.style.setProperty('--vvfix', '50px'), getComputedStyle(document.querySelector('.nav')).translate)") == "0px 50px")
+    await ev(pg, "document.documentElement.style.setProperty('--vvfix', '0px')")
+    check("category detail: no page errors", not pg.errors, "; ".join(pg.errors))
+    await pg.context.close()
+
+
 async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch()
@@ -1980,6 +2038,7 @@ async def main():
         await test_whats_new(browser)
         await test_two_line_statements(browser)
         await test_second_crunch(browser)
+        await test_category_detail(browser)
         await browser.close()
     failed = [r for r in results if not r[1]]
     print(f"\n{len(results) - len(failed)} of {len(results)} checks passed")

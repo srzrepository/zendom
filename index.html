@@ -648,6 +648,8 @@ h2{font-size:1.7rem}
 .btn.ghost{background:var(--surface-2);color:var(--ink)}
 .btn.danger{background:var(--late-soft);color:var(--late);border-color:var(--late)}
 .btn:active{transform:translateY(2px);box-shadow:inset 0 -2px 0 rgba(0,0,0,.18)}
+.nav,.fab{translate:0 var(--vvfix,0px)}
+.toast,.nudge{translate:0 var(--vvfix,0px)}
 .fab{border-radius:4px;background:var(--wood);color:var(--wood-ink);border:3px solid var(--wood-dark);box-shadow:inset 0 0 0 2px var(--wood-light),0 5px 0 rgba(0,0,0,.3);font-family:var(--f-display);font-weight:400;font-size:1.45rem}
 
 /* form fields */
@@ -3232,10 +3234,10 @@ function viewBudget(){
   <section class="sec"><div class="sec-head"><span class="label">Categories${who ? ` · ${esc(nameOf(who))}'s share` : ""}</span><button type="button" class="link" data-act="editCat">+ Add</button></div>
     ${who ? `<p class="small muted" style="margin:0 0 6px">Targets are for both of you, so they show under Both of us.</p>` : ""}
     <div class="glist">${cats.map(c => { const L = who ? 0 : lim(c, k), sp = st.byCat[c.id] || 0, pct = L ? Math.min(100, Math.round(100 * sp / L)) : 0, over = L && sp > L;
-      return `<button type="button" class="catrow" data-act="editCat" data-id="${c.id}"><span class="cn">${esc(c.name)}</span>
+      return `<button type="button" class="catrow" data-act="catDetail" data-id="${c.id}"><span class="cn">${esc(c.name)}</span>
         <span class="cv">${money(sp)}${L ? ` <span class="muted">/ ${money(L)}</span>` : ""}</span>
         ${L ? `<span class="cbar ${over ? "over" : pct >= 85 ? "near" : ""}"><i style="width:${pct}%"></i></span>${over ? `<span class="pill late">${money(sp - L)} over</span>` : ""}` : who ? "" : `<span class="small muted cnone">Nothing assigned</span>`}</button>`; }).join("")}
-      ${st.byCat.none ? `<div class="catrow"><span class="cn">Uncategorized</span><span class="cv">${money(st.byCat.none)}</span></div>` : ""}</div>
+      ${st.byCat.none ? `<button type="button" class="catrow" data-act="catDetail" data-id="none"><span class="cn">Uncategorized</span><span class="cv">${money(st.byCat.none)}</span></button>` : ""}</div>
   </section>
 
   <section class="sec"><div class="sec-head"><span class="label">Paychecks${pays.length ? ` · ${money(pays.reduce((a, p) => a + payMonthly(p), 0))}/mo` : ""}</span><button type="button" class="link" data-act="editPayday">+ Add</button></div>
@@ -3344,6 +3346,26 @@ function paybackBox(t){
       <span class="hint">Counts as ${money(Math.max(0, t.amount - live))} after paybacks${t.shared ? ", and that's what you two split" : ""}. Tap a payback in the list to change it.</span>`
       : `<span class="hint">If a friend (not ${esc(nameOf(other(prefs.user)))}) pays you back for this, add it here so it lowers the cost instead of counting as income.</span>`}
     <button type="button" class="btn ghost small" data-act="addPayback" data-id="${t.id}" style="align-self:flex-start;margin-top:4px">+ A friend paid me back</button></div>`;
+}
+// What made up one category's total this month (same entries and amounts as the category row)
+function catDetail(id){
+  const k = curMonth(), who = HUMANS.includes(prefs.spendWho) ? prefs.spendWho : "", c = state.budget.categories.find(x => x.id === id);
+  if(id !== "none" && !c) return;
+  const amt = t => who ? Math.round(shareOf(t, who)) : t.amount;
+  const tx = netTx().filter(t => t.kind === "expense" && !t.cancelled && isDate(t.date) && t.date.slice(0, 7) === k && (t.categoryId || "none") === id && amt(t) > 0)
+    .sort((a, b) => b.date.localeCompare(a.date) || amt(b) - amt(a));
+  const total = tx.reduce((a, t) => a + amt(t), 0), L = !who && c ? lim(c, k) : 0;
+  const sub = t => [niceDate(t.date), t.shared ? (who ? `shared · ${nameOf(t.paidBy)} paid ${money(t.amount)}` : `${splitLabel(t)} · ${nameOf(t.paidBy)} paid`) : `${nameOf(t.paidBy)}'s`,
+    t.repaid ? `${money(t.gross)} − ${money(t.repaid)} paid back` : "", t.billId ? "from a bill" : ""].filter(Boolean).join(" · ");
+  openSheet(c ? c.name : "Uncategorized", `
+    <p style="margin:0">${esc(monthName(k))}: <b>${money(total)}</b>${who ? ` · ${esc(nameOf(who))}'s part` : ""}${L ? ` of ${money(L)} target${total > L ? ` · <span class="pill late">${money(total - L)} over</span>` : ` · ${money(L - total)} left`}` : ""} · ${tx.length} ${tx.length === 1 ? "entry" : "entries"}</p>
+    ${tx.length ? `<div class="glist">${tx.map(t => `<button type="button" class="txrow" data-act="editTxn" data-id="${t.id}">
+        <span class="av ${t.paidBy}">${sprite(t.paidBy, "", true)}</span>
+        <span class="tb"><span class="tt">${esc(t.note || catName(t.categoryId))}</span><span class="ts">${esc(sub(t))}</span></span>
+        <span class="ta expense">${money(amt(t))}</span></button>`).join("")}</div>`
+      : `<div class="empty"><p>Nothing in ${esc(c ? c.name : "Uncategorized")} for ${esc(monthName(k))}${who ? ` for ${esc(nameOf(who))}` : ""}.</p></div>`}
+    <p class="small muted" style="margin:0">Tap an entry to change it, or move it to another category.</p>
+    <div class="actions">${c ? `<button type="button" class="link" data-act="editCat" data-id="${c.id}">Edit category</button>` : "<span></span>"}<div class="r"><button type="button" class="btn" data-act="closeSheet">Done</button></div></div>`, () => {}, false);
 }
 /* ---- forms ---- */
 function catOptions(sel){ return `<option value="">Uncategorized</option>` + state.budget.categories.map(c => `<option value="${c.id}" ${sel === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join(""); }
@@ -3658,6 +3680,7 @@ const BUDGET_ACTIONS = {
     prefs.sum = id === "custom" ? {preset:"custom", from:cur.from, to:cur.to} : {preset:id}; savePrefs(); render(); },
   wrapDismiss: id => { prefs.wrapSeen = Object.assign({}, prefs.wrapSeen, {[id]: true}); savePrefs(); render(); },
   editCat: id => catForm(id || null),
+  catDetail: id => catDetail(id),
   editBill: id => billForm(id || null),
   editPayday: id => paydayForm(id || null),
   billFromForm: id => { closeSheet(); ACTIONS.payBill(id); },
@@ -5346,14 +5369,31 @@ function fitSheet(vv, fullH){
   return kb;
 }
 let sheetFullH = window.innerHeight;
+// iPhone can leave bottom-pinned bars stuck partway up after the keyboard or a form closes. Move them to the
+// bottom of what's actually on screen. vv: {height, offsetTop, scale}; layoutH: the layout viewport's height.
+function vvShift(vv, layoutH){
+  if(!vv || Math.abs((vv.scale || 1) - 1) > .01) return 0;               // pinch-zoomed: leave it alone
+  if(document.body.classList.contains("typing")) return 0;               // bars are hidden while typing
+  const d = Math.round(vv.offsetTop + vv.height - layoutH);
+  return Math.abs(d) <= 1 ? 0 : d;
+}
+function fixBars(){
+  if(!window.visualViewport) return;
+  const d = vvShift(window.visualViewport, document.documentElement.clientHeight);
+  document.documentElement.style.setProperty("--vvfix", d + "px");
+}
+// make iPhone redraw fixed bars (a no-op scroll), then re-anchor them
+function nudgeBars(){ [60, 350].forEach(ms => setTimeout(() => { try { window.scrollTo(window.scrollX, window.scrollY); } catch(e){} fixBars(); }, ms)); }
+document.addEventListener("focusout", () => setTimeout(() => { if(!document.body.classList.contains("typing")) nudgeBars(); }, 80));
 if(window.visualViewport){
-  const onVV = () => { if(!document.querySelector(".sheet")){ sheetFullH = window.innerHeight; return; }
+  const onVV = () => { fixBars(); if(!document.querySelector(".sheet")){ sheetFullH = window.innerHeight; return; }
     sheetFullH = Math.max(sheetFullH, window.innerHeight); fitSheet(window.visualViewport, sheetFullH); };
   window.visualViewport.addEventListener("resize", onVV);
   window.visualViewport.addEventListener("scroll", onVV);
   window.addEventListener("orientationchange", () => { sheetFullH = 0; setTimeout(onVV, 300); });
+  window.addEventListener("pageshow", nudgeBars); document.addEventListener("visibilitychange", () => { if(!document.hidden) nudgeBars(); });
 }
-function closeSheet(){ dupSheet.open = false; discardPendingPdf(); $("#sheetRoot").innerHTML = ""; document.documentElement.classList.remove("sheet-open"); if(lastFocus && document.contains(lastFocus)) lastFocus.focus({preventScroll:true}); }
+function closeSheet(){ dupSheet.open = false; discardPendingPdf(); $("#sheetRoot").innerHTML = ""; document.documentElement.classList.remove("sheet-open"); nudgeBars(); if(lastFocus && document.contains(lastFocus)) lastFocus.focus({preventScroll:true}); }
 function field(id, label, input, hint){ return `<div class="field" id="f-${id}"><label for="${id}">${label}</label>${input}${hint?`<span class="hint">${hint}</span>`:""}</div>`; }
 function clearErrors(form){ form.querySelectorAll(".field.bad").forEach(f => { f.classList.remove("bad"); const e = f.querySelector(".err"); if(e) e.remove(); }); }
 function fail(id, msg){ const f = $("#f-"+id); if(!f) return; f.classList.add("bad"); f.insertAdjacentHTML("beforeend", `<span class="err" role="alert">${esc(msg)}</span>`); const i = f.querySelector("input,select,textarea"); if(i) i.focus(); }
@@ -5707,9 +5747,10 @@ function toast(msg, undo, label, ms){
   toastTimer = setTimeout(() => { $("#toastRoot").innerHTML = ""; toast.undo = null; }, ms || (undo ? 5000 : 2200));
 }
 /* ---- which version is this, and is there a newer one? ---- */
-const BUILD = "2026-10-30 · 44";
+const BUILD = "2026-10-31 · 45";
 // What's new, newest first: [version, date, changes]. Add a line here with every version.
 const CHANGELOG = [
+  ["45", "2026-10-31", ["Tap a category to see the entries that make up its total.", "A fix for the bottom bar getting stuck partway up the screen on iPhone."]],
   ["44", "2026-10-30", ["A second crunching-the-numbers Jeff on the Summary tab, seen from above with his butt wiggling. It picks one at random each time."]],
   ["43", "2026-10-30", ["Schwab (and similar) PDF statements: purchases come in with the store's name instead of “Visa Debit Card Point of Sale Purchase”, and card payments start unticked as transfers."]],
   ["42", "2026-10-30", ["Fixed: syncing could stop with “The database turned this account away” after you both edited the same thing. Your edits were kept on the phone and go out once both phones update."]],
